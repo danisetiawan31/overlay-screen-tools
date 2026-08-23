@@ -24,7 +24,7 @@ anyhow = "1"
 thiserror = "1"
 specta = "=2.0.0-rc.25"
 specta-typescript = "0.0.12"
-tauri-specta = { version = "2.0.0-rc.20", features = ["typescript"] }
+tauri-specta = { version = "2.0.0-rc.20", features = ["typescript", "derive"] }
 windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Threading"] }
 webview2-com = "0.39.1"
 tauri-plugin-notification = "2.3.3"
