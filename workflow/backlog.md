@@ -8,7 +8,7 @@ Fitur diturunkan dari `docs/PRD.md` Section 3 & 4. Status tracking (progress per
 - [ ] **Stealth capture-exclusion** — Ref: TDD §3. Termasuk verifikasi resize window (drag resize-handle) pakai capture software sebelum item ini ditutup — POC awal cuma verifikasi toggle posisi, belum resize.
 - [x] **Config persistence** — Ref: TDD §7, api-contract §2 (`config:error`).
 - [x] **Window properties & font size** (termasuk resizable + `windowBounds` via move & resize event) — Ref: TDD §8, api-contract §1 (`update_font_size`), api-contract §4 (`windowBounds`).
-- [ ] **Tray icon & app lifecycle** (termasuk notifikasi kegagalan registrasi F9) — Ref: TDD §9, TDD §4.
+- [x] **Tray icon & app lifecycle** (termasuk notifikasi kegagalan registrasi F9) — Ref: TDD §9, TDD §4.
 - [ ] **Global hotkeys** (F8 push-to-talk, F9 toggle) — Ref: TDD §4, api-contract §1 (`get_app_state.qaAvailable`).
 - [ ] **App shell — dua tab Notes/Q&A + auto-switch ke tab Q&A saat F8 mulai rekam** — Ref: PRD §4 poin 2, api-contract §2 (`qa:recording-started`).
 - [ ] **Notes/Teleprompter mode** (termasuk toggle File Mode ↔ Scratchpad, scratchpad tetap ephemeral non-persist) — Ref: TDD §6, api-contract §1–2 (`notes:error` banner & tray notification).

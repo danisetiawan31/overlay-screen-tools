@@ -7,6 +7,7 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_notification::NotificationExt;
 use tauri_specta::{collect_commands, collect_events, Builder};
 use windows_sys::Win32::Foundation::{HWND, LPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -61,6 +62,19 @@ impl Default for OverlayState {
             hwnd: 0,
             config: None,
         }
+    }
+}
+
+/// Menghasilkan pesan notifikasi peringatan jika registrasi shortcut F9 gagal.
+pub fn get_f9_registration_error_notification(
+    result: Result<(), impl std::fmt::Display>,
+) -> Option<String> {
+    match result {
+        Ok(()) => None,
+        Err(err) => Some(format!(
+            "F9 hotkey gagal didaftarkan ({}) - kemungkinan dipakai app lain. Gunakan menu tray 'Show/Hide Overlay' sebagai alternatif.",
+            err
+        )),
     }
 }
 
@@ -140,6 +154,7 @@ pub fn run() {
 
     if let Err(err) = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
@@ -160,7 +175,24 @@ pub fn run() {
                 Err(err) => {
                     let err_msg = format!("Gagal mengakses direktori data aplikasi: {}", err);
                     eprintln!("[CONFIG ERROR] {}", err_msg);
-                    let _ = app.emit("config:error", ConfigErrorPayload { message: err_msg });
+                    let _ = app.emit(
+                        "config:error",
+                        ConfigErrorPayload {
+                            message: err_msg.clone(),
+                        },
+                    );
+                    if let Err(notify_err) = app
+                        .notification()
+                        .builder()
+                        .title("Screen Overlay Tool")
+                        .body(&err_msg)
+                        .show()
+                    {
+                        eprintln!(
+                            "[NOTIFICATION ERROR] Gagal menampilkan notifikasi: {}",
+                            notify_err
+                        );
+                    }
                     std::path::PathBuf::from(".")
                 }
             };
@@ -178,7 +210,24 @@ pub fn run() {
                 }
                 Err(err_msg) => {
                     eprintln!("[CONFIG ERROR] {}", err_msg);
-                    let _ = app.emit("config:error", ConfigErrorPayload { message: err_msg });
+                    let _ = app.emit(
+                        "config:error",
+                        ConfigErrorPayload {
+                            message: err_msg.clone(),
+                        },
+                    );
+                    if let Err(notify_err) = app
+                        .notification()
+                        .builder()
+                        .title("Screen Overlay Tool")
+                        .body(&err_msg)
+                        .show()
+                    {
+                        eprintln!(
+                            "[NOTIFICATION ERROR] Gagal menampilkan notifikasi: {}",
+                            notify_err
+                        );
+                    }
                     None
                 }
             };
@@ -441,8 +490,21 @@ pub fn run() {
                 let _ = tray_builder.build(app);
             }
 
-            if let Err(err) = app.global_shortcut().register(f9_shortcut) {
-                eprintln!("[ERROR] Gagal mendaftarkan F9 shortcut: {}", err);
+            let f9_reg_res = app.global_shortcut().register(f9_shortcut);
+            if let Some(error_msg) = get_f9_registration_error_notification(f9_reg_res) {
+                eprintln!("[ERROR] {}", error_msg);
+                if let Err(notify_err) = app
+                    .notification()
+                    .builder()
+                    .title("Screen Overlay Tool")
+                    .body(&error_msg)
+                    .show()
+                {
+                    eprintln!(
+                        "[NOTIFICATION ERROR] Gagal menampilkan notifikasi: {}",
+                        notify_err
+                    );
+                }
             } else {
                 println!("[POC] F9 shortcut terdaftar - siap ditest");
             }
@@ -479,5 +541,23 @@ mod tests {
         let is_concealed_3 = state.toggle_concealed();
         assert!(is_concealed_3);
         assert!(state.is_concealed);
+    }
+
+    #[test]
+    fn test_f9_registration_error_notification_ok_returns_none() {
+        let res: Result<(), String> = Ok(());
+        let notif = get_f9_registration_error_notification(res);
+        assert_eq!(notif, None);
+    }
+
+    #[test]
+    fn test_f9_registration_error_notification_err_returns_message_and_no_panic() {
+        let res: Result<(), &str> = Err("hotkey already registered by another app");
+        let notif = get_f9_registration_error_notification(res);
+        assert!(notif.is_some());
+        let msg = notif.unwrap();
+        assert!(msg.contains("F9 hotkey gagal didaftarkan"));
+        assert!(msg.contains("Show/Hide Overlay"));
+        assert!(msg.contains("hotkey already registered by another app"));
     }
 }
