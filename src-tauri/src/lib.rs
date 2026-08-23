@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod config;
 
 use config::{Config, ConfigErrorPayload};
@@ -56,7 +57,7 @@ impl Default for OverlayState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = Builder::<tauri::Wry>::new()
-        .commands(collect_commands![])
+        .commands(collect_commands![commands::update_font_size])
         .events(collect_events![ConfigErrorPayload]);
 
     #[cfg(debug_assertions)]
@@ -146,7 +147,7 @@ pub fn run() {
                 }
             };
 
-            match config::load_config(&app_data_dir) {
+            let loaded_config_opt = match config::load_config(&app_data_dir) {
                 Ok(loaded_cfg) => {
                     println!("[CONFIG] Berhasil memuat config.json");
                     let state = app.state::<Mutex<OverlayState>>();
@@ -154,13 +155,15 @@ pub fn run() {
                         Ok(guard) => guard,
                         Err(poisoned) => poisoned.into_inner(),
                     };
-                    state_guard.config = Some(loaded_cfg);
+                    state_guard.config = Some(loaded_cfg.clone());
+                    Some(loaded_cfg)
                 }
                 Err(err_msg) => {
                     eprintln!("[CONFIG ERROR] {}", err_msg);
                     let _ = app.emit("config:error", ConfigErrorPayload { message: err_msg });
+                    None
                 }
-            }
+            };
 
             let window = match app.get_webview_window("main") {
                 Some(w) => w,
@@ -170,8 +173,42 @@ pub fn run() {
                 }
             };
 
+            // 2. Validasi windowBounds terhadap monitor aktif
+            let monitor_rects: Vec<config::MonitorRect> = match window.available_monitors() {
+                Ok(monitors) => monitors
+                    .into_iter()
+                    .map(|m| {
+                        let pos = m.position();
+                        let size = m.size();
+                        config::MonitorRect::new(pos.x, pos.y, size.width, size.height)
+                    })
+                    .collect(),
+                Err(err) => {
+                    eprintln!("[WARN] Gagal membaca monitor aktif: {}", err);
+                    Vec::new()
+                }
+            };
+
+            let default_bounds = config::WindowBounds::default();
+            let initial_bounds = match &loaded_config_opt {
+                Some(cfg) => config::resolve_initial_window_bounds(
+                    &cfg.window_bounds,
+                    &monitor_rects,
+                    &default_bounds,
+                ),
+                None => default_bounds,
+            };
+
+            let _ = window.set_size(tauri::PhysicalSize::new(
+                initial_bounds.width,
+                initial_bounds.height,
+            ));
+            let _ = window.set_position(tauri::PhysicalPosition::new(
+                initial_bounds.x,
+                initial_bounds.y,
+            ));
+
             let _ = window.set_always_on_top(true);
-            let _ = window.center();
             let _ = window.show();
             let _ = window.set_focus();
 
@@ -189,17 +226,67 @@ pub fn run() {
                 apply_stealth(hwnd_raw);
             }
 
-            if let Ok(pos) = window.outer_position() {
+            // Simpan posisi awal & HWND ke OverlayState
+            {
                 let state = app.state::<Mutex<OverlayState>>();
                 let mut state_guard = match state.lock() {
                     Ok(guard) => guard,
                     Err(poisoned) => poisoned.into_inner(),
                 };
-                state_guard.last_normal_position = pos;
+                state_guard.last_normal_position =
+                    PhysicalPosition::new(initial_bounds.x, initial_bounds.y);
                 state_guard.hwnd = hwnd_raw;
             }
 
-            // 3. Webview & Window event listener untuk Re-Apply Stealth secara otomatis
+            // 3. Setup Debounced Window Bounds Persistence Worker
+            let (tx_bounds, rx_bounds) = std::sync::mpsc::channel::<config::WindowBounds>();
+            let app_data_dir_for_debounce = app_data_dir.clone();
+            let app_handle_for_debounce = app.handle().clone();
+
+            std::thread::spawn(move || {
+                while let Ok(mut latest_bounds) = rx_bounds.recv() {
+                    let debounce_duration = std::time::Duration::from_millis(500);
+                    let start = std::time::Instant::now();
+                    loop {
+                        let elapsed = start.elapsed();
+                        if elapsed >= debounce_duration {
+                            break;
+                        }
+                        let remaining = debounce_duration - elapsed;
+                        match rx_bounds.recv_timeout(remaining) {
+                            Ok(new_bounds) => {
+                                latest_bounds = new_bounds;
+                            }
+                            Err(_) => {
+                                break;
+                            }
+                        }
+                    }
+
+                    // Write-through: Simpan ke disk dulu
+                    if let Err(err) = config::update_config_window_bounds(
+                        &app_data_dir_for_debounce,
+                        latest_bounds.clone(),
+                    ) {
+                        eprintln!(
+                            "[CONFIG ERROR] Gagal mendebounce simpan window bounds: {}",
+                            err
+                        );
+                    } else {
+                        // Jika penulisan disk sukses, perbarui in-memory state
+                        let state = app_handle_for_debounce.state::<Mutex<OverlayState>>();
+                        let mut state_guard = match state.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        if let Some(ref mut cfg) = state_guard.config {
+                            cfg.window_bounds = latest_bounds;
+                        }
+                    }
+                }
+            });
+
+            // 4. Webview & Window event listener
             let hwnd_for_webview = hwnd_raw;
             window.on_webview_event(move |_event| {
                 if hwnd_for_webview != 0 {
@@ -209,12 +296,98 @@ pub fn run() {
             });
 
             let hwnd_for_window = hwnd_raw;
+            let tx_for_window = tx_bounds.clone();
+            let app_handle_for_window = app.handle().clone();
+            let app_data_dir_for_window = app_data_dir.clone();
+            let window_for_event = window.clone();
+
             window.on_window_event(move |event| {
-                if let tauri::WindowEvent::Focused(true) = event {
-                    if hwnd_for_window != 0 {
-                        apply_stealth(hwnd_for_window);
-                        println!("[STEALTH] Re-applied pada WindowEvent::Focused");
+                match event {
+                    tauri::WindowEvent::Focused(true) => {
+                        if hwnd_for_window != 0 {
+                            apply_stealth(hwnd_for_window);
+                            println!("[STEALTH] Re-applied pada WindowEvent::Focused");
+                        }
                     }
+                    tauri::WindowEvent::Moved(pos) => {
+                        let state = app_handle_for_window.state::<Mutex<OverlayState>>();
+                        let is_concealed = {
+                            let mut state_guard = match state.lock() {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            if !state_guard.is_concealed {
+                                state_guard.last_normal_position = *pos;
+                            }
+                            state_guard.is_concealed
+                        };
+
+                        // ATURAN WAJIB: Jangan simpan jika is_concealed == true (koordinat -9999)
+                        if !is_concealed {
+                            if let Ok(size) = window_for_event.outer_size() {
+                                let _ = tx_for_window.send(config::WindowBounds {
+                                    x: pos.x,
+                                    y: pos.y,
+                                    width: size.width,
+                                    height: size.height,
+                                });
+                            }
+                        }
+                    }
+                    tauri::WindowEvent::Resized(size) => {
+                        let state = app_handle_for_window.state::<Mutex<OverlayState>>();
+                        let is_concealed = {
+                            let state_guard = match state.lock() {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            state_guard.is_concealed
+                        };
+
+                        // ATURAN WAJIB: Jangan simpan jika is_concealed == true
+                        if !is_concealed {
+                            if let Ok(pos) = window_for_event.outer_position() {
+                                let _ = tx_for_window.send(config::WindowBounds {
+                                    x: pos.x,
+                                    y: pos.y,
+                                    width: size.width,
+                                    height: size.height,
+                                });
+                            }
+                        }
+                    }
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                        // Flush-on-exit: Pastikan posisi window terakhir ter-commit ke disk jika app ditutup dalam rentang debounce < 500ms
+                        let state = app_handle_for_window.state::<Mutex<OverlayState>>();
+                        let (is_concealed, last_pos) = {
+                            let state_guard = match state.lock() {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            (state_guard.is_concealed, state_guard.last_normal_position)
+                        };
+
+                        if !is_concealed {
+                            if let Ok(size) = window_for_event.outer_size() {
+                                let bounds = config::WindowBounds {
+                                    x: last_pos.x,
+                                    y: last_pos.y,
+                                    width: size.width,
+                                    height: size.height,
+                                };
+                                if let Err(err) = config::update_config_window_bounds(
+                                    &app_data_dir_for_window,
+                                    bounds,
+                                ) {
+                                    eprintln!(
+                                        "[CONFIG ERROR] Gagal flush window bounds saat close: {}",
+                                        err
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             });
 
