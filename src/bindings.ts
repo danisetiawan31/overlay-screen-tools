@@ -6,16 +6,33 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 /** Commands */
 export const commands = {
 	updateFontSize: (size: number) => typedError<null, string>(__TAURI_INVOKE("update_font_size", { size })),
+	getAppState: () => typedError<AppState, string>(__TAURI_INVOKE("get_app_state")),
+	testTriggerHotkey: (args: TestTriggerHotkeyArgs) => typedError<null, string>(__TAURI_INVOKE("test_trigger_hotkey", { args })),
 };
 
 /** Events */
 export const events = {
 	configErrorPayload: makeEvent<ConfigErrorPayload>("config-error-payload"),
+	recordingEndedPayload: makeEvent<RecordingEndedPayload>("recording-ended-payload"),
 };
 
 /* Types */
+export type AppState = {
+	fontSize: number,
+	qaAvailable: boolean,
+};
+
 export type ConfigErrorPayload = {
 	message: string,
+};
+
+export type RecordingEndedPayload = {
+	belowThreshold: boolean,
+};
+
+export type TestTriggerHotkeyArgs = {
+	hotkey: string,
+	state: string,
 };
 
 /* Tauri Specta runtime */

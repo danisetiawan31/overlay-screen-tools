@@ -2,6 +2,7 @@ pub mod commands;
 pub mod config;
 
 use config::{Config, ConfigErrorPayload};
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
@@ -16,6 +17,15 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 const WDA_EXCLUDEFROMCAPTURE: u32 = 0x00000011;
+
+/// Ambang batas durasi tahan minimum F8 (ms) untuk membedakan antara klik tak sengaja dan push-to-talk yang valid.
+pub const PUSH_TO_TALK_MIN_HOLD_MS: u64 = 400;
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingEndedPayload {
+    pub below_threshold: bool,
+}
 
 unsafe extern "system" fn enum_child_proc(hwnd: HWND, _lparam: LPARAM) -> i32 {
     // SAFETY: HWND di-pass langsung oleh sistem Windows saat EnumChildWindows berjalan.
@@ -44,6 +54,9 @@ pub struct OverlayState {
     pub last_normal_position: PhysicalPosition<i32>,
     pub hwnd: isize,
     pub config: Option<Config>,
+    pub qa_available: bool,
+    pub is_recording: bool,
+    pub recording_start_instant: Option<std::time::Instant>,
 }
 
 impl OverlayState {
@@ -61,19 +74,133 @@ impl Default for OverlayState {
             last_normal_position: PhysicalPosition::new(100, 100),
             hwnd: 0,
             config: None,
+            qa_available: true,
+            is_recording: false,
+            recording_start_instant: None,
         }
     }
 }
 
-/// Menghasilkan pesan notifikasi peringatan jika registrasi shortcut F9 gagal.
-pub fn get_f9_registration_error_notification(
+/// Helper murni untuk mengecek string env var E2E_TEST_MODE (hanya "true" case-insensitive).
+pub fn parse_e2e_test_mode_from_str(val: Option<&str>) -> bool {
+    val.map(|v| v.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Memeriksa apakah aplikasi dijalankan dalam mode pengujian E2E (`E2E_TEST_MODE=true`).
+pub fn is_e2e_test_mode() -> bool {
+    let env_val = std::env::var("E2E_TEST_MODE").ok();
+    parse_e2e_test_mode_from_str(env_val.as_deref())
+}
+
+/// Memeriksa apakah durasi hold berada di bawah ambang batas minimum push-to-talk.
+pub fn is_hold_duration_below_threshold(duration: std::time::Duration) -> bool {
+    duration.as_millis() < PUSH_TO_TALK_MIN_HOLD_MS as u128
+}
+
+/// Logika keputusan murni saat tombol F8 ditekan (Pressed).
+///
+/// Mengembalikan `true` jika event start harus di-emit (tekanan pertama).
+/// Mengembalikan `false` jika sedang recording (mengabaikan repeated Pressed akibat key-repeat OS).
+pub fn handle_f8_press(
+    is_recording: &mut bool,
+    start_instant: &mut Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    if !*is_recording {
+        *is_recording = true;
+        *start_instant = Some(now);
+        true
+    } else {
+        false
+    }
+}
+
+/// Logika keputusan murni saat tombol F8 dilepas (Released).
+///
+/// Mengembalikan `Some(below_threshold)` jika sebelumnya sedang recording.
+/// Mengembalikan `None` jika dilepas tanpa ada status recording sebelumnya (orphaned Released).
+pub fn handle_f8_release(
+    is_recording: &mut bool,
+    start_instant: &mut Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> Option<bool> {
+    if *is_recording {
+        let start = start_instant.take().unwrap_or(now);
+        *is_recording = false;
+        let duration = now.saturating_duration_since(start);
+        Some(is_hold_duration_below_threshold(duration))
+    } else {
+        None
+    }
+}
+
+/// Handler terpusat saat F8 ditekan (dipakai bersama oleh shortcut fisik dan simulasi E2E).
+pub fn handle_f8_pressed_event(app: &tauri::AppHandle) {
+    let state = app.state::<Mutex<OverlayState>>();
+    let should_emit = {
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let guard = &mut *state_guard;
+        handle_f8_press(
+            &mut guard.is_recording,
+            &mut guard.recording_start_instant,
+            std::time::Instant::now(),
+        )
+    };
+
+    if should_emit {
+        println!("[HOTKEY] F8 Pressed: recording started");
+        let _ = app.emit("qa:recording-started", ());
+    }
+}
+
+/// Handler terpusat saat F8 dilepas (dipakai bersama oleh shortcut fisik dan simulasi E2E).
+pub fn handle_f8_released_event(app: &tauri::AppHandle) {
+    let state = app.state::<Mutex<OverlayState>>();
+    let below_threshold_opt = {
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let guard = &mut *state_guard;
+        handle_f8_release(
+            &mut guard.is_recording,
+            &mut guard.recording_start_instant,
+            std::time::Instant::now(),
+        )
+    };
+
+    if let Some(below_threshold) = below_threshold_opt {
+        println!(
+            "[HOTKEY] F8 Released: recording ended (belowThreshold={})",
+            below_threshold
+        );
+        let _ = app.emit(
+            "qa:recording-ended",
+            RecordingEndedPayload { below_threshold },
+        );
+    }
+}
+
+/// Menghasilkan pesan notifikasi peringatan jika registrasi shortcut (F8/F9) gagal.
+pub fn get_hotkey_registration_error_notification(
+    hotkey_name: &str,
     result: Result<(), impl std::fmt::Display>,
 ) -> Option<String> {
     match result {
         Ok(()) => None,
         Err(err) => Some(format!(
-            "F9 hotkey gagal didaftarkan ({}) - kemungkinan dipakai app lain. Gunakan menu tray 'Show/Hide Overlay' sebagai alternatif.",
-            err
+            "{} hotkey gagal didaftarkan ({}) - kemungkinan dipakai app lain. {}",
+            hotkey_name,
+            err,
+            if hotkey_name == "F9" {
+                "Gunakan menu tray 'Show/Hide Overlay' sebagai alternatif."
+            } else {
+                "Fitur Live Q&A dinonaktifkan untuk sesi ini."
+            }
         )),
     }
 }
@@ -138,9 +265,22 @@ pub fn toggle_overlay_visibility(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(debug_assertions)]
     let builder = Builder::<tauri::Wry>::new()
-        .commands(collect_commands![commands::update_font_size])
-        .events(collect_events![ConfigErrorPayload]);
+        .commands(collect_commands![
+            commands::update_font_size,
+            commands::get_app_state,
+            commands::test_trigger_hotkey
+        ])
+        .events(collect_events![ConfigErrorPayload, RecordingEndedPayload]);
+
+    #[cfg(not(debug_assertions))]
+    let builder = Builder::<tauri::Wry>::new()
+        .commands(collect_commands![
+            commands::update_font_size,
+            commands::get_app_state
+        ])
+        .events(collect_events![ConfigErrorPayload, RecordingEndedPayload]);
 
     #[cfg(debug_assertions)]
     if let Err(err) = builder.export(
@@ -150,6 +290,7 @@ pub fn run() {
         eprintln!("[SPECTA] Failed to export typescript bindings: {}", err);
     }
 
+    let f8_shortcut = Shortcut::new(None, Code::F8);
     let f9_shortcut = Shortcut::new(None, Code::F9);
 
     if let Err(err) = tauri::Builder::default()
@@ -160,6 +301,15 @@ pub fn run() {
                 .with_handler(move |app, shortcut, event| {
                     if shortcut == &f9_shortcut && event.state() == ShortcutState::Pressed {
                         toggle_overlay_visibility(app);
+                    } else if shortcut == &f8_shortcut {
+                        match event.state() {
+                            ShortcutState::Pressed => {
+                                handle_f8_pressed_event(app);
+                            }
+                            ShortcutState::Released => {
+                                handle_f8_released_event(app);
+                            }
+                        }
                     }
                 })
                 .build(),
@@ -490,23 +640,67 @@ pub fn run() {
                 let _ = tray_builder.build(app);
             }
 
-            let f9_reg_res = app.global_shortcut().register(f9_shortcut);
-            if let Some(error_msg) = get_f9_registration_error_notification(f9_reg_res) {
-                eprintln!("[ERROR] {}", error_msg);
-                if let Err(notify_err) = app
-                    .notification()
-                    .builder()
-                    .title("Screen Overlay Tool")
-                    .body(&error_msg)
-                    .show()
-                {
-                    eprintln!(
-                        "[NOTIFICATION ERROR] Gagal menampilkan notifikasi: {}",
-                        notify_err
-                    );
-                }
+            // 6. Registrasi Shortcut F8 & F9 (dengan E2E_TEST_MODE check & graceful degradation)
+            if is_e2e_test_mode() {
+                println!("[E2E] E2E_TEST_MODE aktif: Registrasi global hotkey fisik (F8 & F9) ke OS dilewati.");
+                let state = app.state::<Mutex<OverlayState>>();
+                let mut state_guard = match state.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                state_guard.qa_available = true;
             } else {
-                println!("[POC] F9 shortcut terdaftar - siap ditest");
+                // Registrasi F9 (Toggle visibility)
+                let f9_reg_res = app.global_shortcut().register(f9_shortcut);
+                if let Some(error_msg) =
+                    get_hotkey_registration_error_notification("F9", f9_reg_res)
+                {
+                    eprintln!("[ERROR] {}", error_msg);
+                    if let Err(notify_err) = app
+                        .notification()
+                        .builder()
+                        .title("Screen Overlay Tool")
+                        .body(&error_msg)
+                        .show()
+                    {
+                        eprintln!(
+                            "[NOTIFICATION ERROR] Gagal menampilkan notifikasi: {}",
+                            notify_err
+                        );
+                    }
+                } else {
+                    println!("[HOTKEY] F9 shortcut terdaftar - siap digunakan");
+                }
+
+                // Registrasi F8 (Live Q&A push-to-talk)
+                let f8_reg_res = app.global_shortcut().register(f8_shortcut);
+                let state = app.state::<Mutex<OverlayState>>();
+                let mut state_guard = match state.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+
+                if let Some(error_msg) =
+                    get_hotkey_registration_error_notification("F8", f8_reg_res)
+                {
+                    eprintln!("[ERROR] {}", error_msg);
+                    state_guard.qa_available = false;
+                    if let Err(notify_err) = app
+                        .notification()
+                        .builder()
+                        .title("Screen Overlay Tool")
+                        .body(&error_msg)
+                        .show()
+                    {
+                        eprintln!(
+                            "[NOTIFICATION ERROR] Gagal menampilkan notifikasi: {}",
+                            notify_err
+                        );
+                    }
+                } else {
+                    state_guard.qa_available = true;
+                    println!("[HOTKEY] F8 shortcut terdaftar - siap digunakan");
+                }
             }
 
             Ok(())
@@ -544,20 +738,165 @@ mod tests {
     }
 
     #[test]
-    fn test_f9_registration_error_notification_ok_returns_none() {
-        let res: Result<(), String> = Ok(());
-        let notif = get_f9_registration_error_notification(res);
-        assert_eq!(notif, None);
+    fn test_get_hotkey_registration_error_notification_ok_returns_none() {
+        let res_f9: Result<(), String> = Ok(());
+        assert_eq!(
+            get_hotkey_registration_error_notification("F9", res_f9),
+            None
+        );
+
+        let res_f8: Result<(), String> = Ok(());
+        assert_eq!(
+            get_hotkey_registration_error_notification("F8", res_f8),
+            None
+        );
     }
 
     #[test]
-    fn test_f9_registration_error_notification_err_returns_message_and_no_panic() {
-        let res: Result<(), &str> = Err("hotkey already registered by another app");
-        let notif = get_f9_registration_error_notification(res);
+    fn test_get_hotkey_registration_error_notification_f9_err() {
+        let res: Result<(), &str> = Err("hotkey conflict F9");
+        let notif = get_hotkey_registration_error_notification("F9", res);
         assert!(notif.is_some());
         let msg = notif.unwrap();
         assert!(msg.contains("F9 hotkey gagal didaftarkan"));
         assert!(msg.contains("Show/Hide Overlay"));
-        assert!(msg.contains("hotkey already registered by another app"));
+        assert!(msg.contains("hotkey conflict F9"));
+    }
+
+    #[test]
+    fn test_get_hotkey_registration_error_notification_f8_err() {
+        let res: Result<(), &str> = Err("hotkey conflict F8");
+        let notif = get_hotkey_registration_error_notification("F8", res);
+        assert!(notif.is_some());
+        let msg = notif.unwrap();
+        assert!(msg.contains("F8 hotkey gagal didaftarkan"));
+        assert!(msg.contains("Live Q&A dinonaktifkan"));
+        assert!(msg.contains("hotkey conflict F8"));
+    }
+
+    #[test]
+    fn test_overlay_state_default_qa_available_is_true() {
+        let state = OverlayState::default();
+        assert!(state.qa_available);
+    }
+
+    #[test]
+    fn test_overlay_state_qa_available_reflects_f8_registration_failure() {
+        let mut state = OverlayState::default();
+        assert!(state.qa_available);
+
+        // Simulasi path registrasi F8 gagal di setup()
+        let f8_reg_res: Result<(), &str> = Err("hotkey F8 occupied");
+        if get_hotkey_registration_error_notification("F8", f8_reg_res).is_some() {
+            state.qa_available = false;
+        }
+
+        assert!(!state.qa_available);
+    }
+
+    #[test]
+    fn test_parse_e2e_test_mode_from_str_matrix() {
+        // Harus bernilai true hanya jika string "true" (case-insensitive)
+        assert!(parse_e2e_test_mode_from_str(Some("true")));
+        assert!(parse_e2e_test_mode_from_str(Some("TRUE")));
+        assert!(parse_e2e_test_mode_from_str(Some("True")));
+        assert!(parse_e2e_test_mode_from_str(Some("  true  ")));
+
+        // Nilai lain harus dievaluasi sebagai false
+        assert!(!parse_e2e_test_mode_from_str(Some("false")));
+        assert!(!parse_e2e_test_mode_from_str(Some("1")));
+        assert!(!parse_e2e_test_mode_from_str(Some("0")));
+        assert!(!parse_e2e_test_mode_from_str(Some("e2e")));
+        assert!(!parse_e2e_test_mode_from_str(Some("")));
+        assert!(!parse_e2e_test_mode_from_str(None));
+    }
+
+    #[test]
+    fn test_is_hold_duration_below_threshold() {
+        assert!(is_hold_duration_below_threshold(
+            std::time::Duration::from_millis(0)
+        ));
+        assert!(is_hold_duration_below_threshold(
+            std::time::Duration::from_millis(200)
+        ));
+        assert!(is_hold_duration_below_threshold(
+            std::time::Duration::from_millis(399)
+        ));
+
+        // 400ms ke atas dianggap hold valid (below_threshold = false)
+        assert!(!is_hold_duration_below_threshold(
+            std::time::Duration::from_millis(400)
+        ));
+        assert!(!is_hold_duration_below_threshold(
+            std::time::Duration::from_millis(500)
+        ));
+        assert!(!is_hold_duration_below_threshold(
+            std::time::Duration::from_millis(1500)
+        ));
+    }
+
+    #[test]
+    fn test_handle_f8_press_first_time_returns_true_and_sets_recording() {
+        let mut is_recording = false;
+        let mut start_instant = None;
+        let now = std::time::Instant::now();
+
+        let should_emit = handle_f8_press(&mut is_recording, &mut start_instant, now);
+        assert!(should_emit);
+        assert!(is_recording);
+        assert_eq!(start_instant, Some(now));
+    }
+
+    #[test]
+    fn test_handle_f8_press_repeated_returns_false_and_preserves_timestamp() {
+        let mut is_recording = true;
+        let t0 = std::time::Instant::now();
+        let mut start_instant = Some(t0);
+        let t1 = t0 + std::time::Duration::from_millis(100);
+
+        // Key-repeat dari OS saat tombol masih ditahan
+        let should_emit = handle_f8_press(&mut is_recording, &mut start_instant, t1);
+        assert!(!should_emit);
+        assert!(is_recording);
+        assert_eq!(start_instant, Some(t0)); // Timestamp awal tidak tertimpa
+    }
+
+    #[test]
+    fn test_handle_f8_release_below_threshold_returns_some_true() {
+        let mut is_recording = true;
+        let t0 = std::time::Instant::now();
+        let mut start_instant = Some(t0);
+        let t1 = t0 + std::time::Duration::from_millis(200); // 200ms < 400ms
+
+        let res = handle_f8_release(&mut is_recording, &mut start_instant, t1);
+        assert_eq!(res, Some(true)); // belowThreshold = true
+        assert!(!is_recording);
+        assert_eq!(start_instant, None);
+    }
+
+    #[test]
+    fn test_handle_f8_release_above_threshold_returns_some_false() {
+        let mut is_recording = true;
+        let t0 = std::time::Instant::now();
+        let mut start_instant = Some(t0);
+        let t1 = t0 + std::time::Duration::from_millis(600); // 600ms >= 400ms
+
+        let res = handle_f8_release(&mut is_recording, &mut start_instant, t1);
+        assert_eq!(res, Some(false)); // belowThreshold = false
+        assert!(!is_recording);
+        assert_eq!(start_instant, None);
+    }
+
+    #[test]
+    fn test_handle_f8_release_when_not_recording_returns_none_and_no_panic() {
+        let mut is_recording = false;
+        let mut start_instant = None;
+        let now = std::time::Instant::now();
+
+        // Released terpanggil padahal tidak sedang recording
+        let res = handle_f8_release(&mut is_recording, &mut start_instant, now);
+        assert_eq!(res, None);
+        assert!(!is_recording);
+        assert_eq!(start_instant, None);
     }
 }
