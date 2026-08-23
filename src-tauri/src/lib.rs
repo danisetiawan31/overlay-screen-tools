@@ -3,6 +3,8 @@ pub mod config;
 
 use config::{Config, ConfigErrorPayload};
 use std::sync::Mutex;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_specta::{collect_commands, collect_events, Builder};
@@ -43,6 +45,14 @@ pub struct OverlayState {
     pub config: Option<Config>,
 }
 
+impl OverlayState {
+    /// Membalikkan state `is_concealed` (Normal <-> Concealed) dan mengembalikan state baru.
+    pub fn toggle_concealed(&mut self) -> bool {
+        self.is_concealed = !self.is_concealed;
+        self.is_concealed
+    }
+}
+
 impl Default for OverlayState {
     fn default() -> Self {
         Self {
@@ -51,6 +61,64 @@ impl Default for OverlayState {
             hwnd: 0,
             config: None,
         }
+    }
+}
+
+/// Fungsi standalone untuk toggle visibilitas overlay (Normal <-> Concealed).
+///
+/// Dipakai bersama oleh shortcut F9 dan context menu Tray "Show/Hide Overlay".
+pub fn toggle_overlay_visibility(app: &tauri::AppHandle) {
+    let state = app.state::<Mutex<OverlayState>>();
+    let mut state = match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if state.hwnd == 0 {
+        return;
+    }
+    let hwnd = state.hwnd as HWND;
+
+    if state.is_concealed {
+        let pos = state.last_normal_position;
+        // SAFETY: HWND adalah handle window utama yang valid dan tersimpan di OverlayState.
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                0 as _,
+                pos.x,
+                pos.y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        // Re-apply stealth saat kembali ke Normal state
+        apply_stealth(state.hwnd);
+        state.toggle_concealed();
+        println!(
+            "[VISIBILITY] Normal: posisi ({}, {}) & stealth re-applied",
+            pos.x, pos.y
+        );
+    } else {
+        if let Some(window) = app.get_webview_window("main") {
+            if let Ok(pos) = window.outer_position() {
+                state.last_normal_position = pos;
+            }
+        }
+        // SAFETY: HWND adalah handle window utama yang valid dan dipindahkan ke koordinat offscreen (-9999, -9999).
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                0 as _,
+                -9999,
+                -9999,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        state.toggle_concealed();
+        println!("[VISIBILITY] Concealed: dipindahkan ke (-9999, -9999)");
     }
 }
 
@@ -75,58 +143,8 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    if shortcut != &f9_shortcut || event.state() != ShortcutState::Pressed {
-                        return;
-                    }
-
-                    let state = app.state::<Mutex<OverlayState>>();
-                    let mut state = match state.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    let hwnd = state.hwnd as HWND;
-
-                    if state.is_concealed {
-                        let pos = state.last_normal_position;
-                        // SAFETY: HWND adalah handle window utama yang valid dan tersimpan di OverlayState.
-                        unsafe {
-                            SetWindowPos(
-                                hwnd,
-                                0 as _,
-                                pos.x,
-                                pos.y,
-                                0,
-                                0,
-                                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                            );
-                        }
-                        // Re-apply stealth saat kembali ke Normal state
-                        apply_stealth(state.hwnd);
-                        state.is_concealed = false;
-                        println!(
-                            "[POC] F9 -> Normal: posisi ({}, {}) & stealth re-applied",
-                            pos.x, pos.y
-                        );
-                    } else {
-                        if let Some(window) = app.get_webview_window("main") {
-                            if let Ok(pos) = window.outer_position() {
-                                state.last_normal_position = pos;
-                            }
-                        }
-                        // SAFETY: HWND adalah handle window utama yang valid dan dipindahkan ke koordinat offscreen (-9999, -9999).
-                        unsafe {
-                            SetWindowPos(
-                                hwnd,
-                                0 as _,
-                                -9999,
-                                -9999,
-                                0,
-                                0,
-                                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                            );
-                        }
-                        state.is_concealed = true;
-                        println!("[POC] F9 -> Concealed: dipindahkan ke (-9999, -9999)");
+                    if shortcut == &f9_shortcut && event.state() == ShortcutState::Pressed {
+                        toggle_overlay_visibility(app);
                     }
                 })
                 .build(),
@@ -391,6 +409,38 @@ pub fn run() {
                 }
             });
 
+            // 5. Setup Tray Icon & Context Menu (TDD §9)
+            let toggle_menu_item =
+                MenuItemBuilder::with_id("toggle", "Show/Hide Overlay").build(app)?;
+            let quit_menu_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let tray_menu = MenuBuilder::new(app)
+                .items(&[&toggle_menu_item, &quit_menu_item])
+                .build()?;
+
+            let tray_builder = TrayIconBuilder::new()
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "toggle" => {
+                        toggle_overlay_visibility(app);
+                    }
+                    "quit" => {
+                        // ATURAN WAJIB (Scope #3): Melalui jalur close window biasa
+                        // agar WindowEvent::CloseRequested/Destroyed ter-trigger dan
+                        // flush pending windowBounds write tetap jalan.
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.close();
+                        }
+                    }
+                    _ => {}
+                });
+
+            if let Some(icon) = app.default_window_icon() {
+                let _ = tray_builder.icon(icon.clone()).build(app);
+            } else {
+                let _ = tray_builder.build(app);
+            }
+
             if let Err(err) = app.global_shortcut().register(f9_shortcut) {
                 eprintln!("[ERROR] Gagal mendaftarkan F9 shortcut: {}", err);
             } else {
@@ -402,5 +452,32 @@ pub fn run() {
         .run(tauri::generate_context!())
     {
         eprintln!("Error while running tauri application: {}", err);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_overlay_state_toggle_concealed_cycle() {
+        let mut state = OverlayState::default();
+        // Awal mula: Normal state (is_concealed == false)
+        assert!(!state.is_concealed);
+
+        // Panggilan ke-1: berpindah ke Concealed (is_concealed == true)
+        let is_concealed_1 = state.toggle_concealed();
+        assert!(is_concealed_1);
+        assert!(state.is_concealed);
+
+        // Panggilan ke-2: kembali ke Normal (is_concealed == false)
+        let is_concealed_2 = state.toggle_concealed();
+        assert!(!is_concealed_2);
+        assert!(!state.is_concealed);
+
+        // Panggilan ke-3: berpindah ke Concealed lagi (is_concealed == true)
+        let is_concealed_3 = state.toggle_concealed();
+        assert!(is_concealed_3);
+        assert!(state.is_concealed);
     }
 }
