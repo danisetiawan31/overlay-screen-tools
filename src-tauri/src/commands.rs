@@ -215,7 +215,7 @@ pub async fn send_audio_blob(args: SendAudioBlobArgs, app: tauri::AppHandle) -> 
         return Err("Audio blob kosong".to_string());
     }
 
-    let (groq_keys, openrouter_keys, current_gen) = {
+    let (groq_keys, openrouter_keys, current_gen, obsidian_vault_path) = {
         let state = app.state::<Mutex<OverlayState>>();
         let state_guard = match state.lock() {
             Ok(guard) => guard,
@@ -229,6 +229,7 @@ pub async fn send_audio_blob(args: SendAudioBlobArgs, app: tauri::AppHandle) -> 
             cfg.groq_api_keys,
             cfg.openrouter_api_keys,
             state_guard.qa_generation,
+            cfg.obsidian_vault_path,
         )
     };
 
@@ -275,12 +276,41 @@ pub async fn send_audio_blob(args: SendAudioBlobArgs, app: tauri::AppHandle) -> 
         }
     };
 
-    // 2. AI answering via OpenRouter dengan loop fallback API key
+    // 2. Ekstraksi konteks catatan Obsidian jika vault_path dikonfigurasi
+    let vault_context = if let Some(ref path_str) = obsidian_vault_path {
+        let path = std::path::Path::new(path_str);
+        match crate::vault::scan_vault_markdown_files(path) {
+            Ok(docs) => {
+                let ctx = crate::vault::extract_relevant_context(&docs, &transcript, 3000);
+                if let Some(ref matched) = ctx {
+                    println!(
+                        "[VAULT CONTEXT] Menyuntikkan {} karakter konteks Obsidian ke prompt OpenRouter",
+                        matched.len()
+                    );
+                }
+                ctx
+            }
+            Err(err) => {
+                eprintln!(
+                    "[VAULT ERROR] Gagal memindai Obsidian Vault di '{}': {}",
+                    path_str, err
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // 3. AI answering via OpenRouter dengan loop fallback API key dan injeksi konteks Obsidian
     let answer_res = crate::execute_fallback_keys(&openrouter_keys, |key| {
         let key = key.to_string();
         let client = client.clone();
         let transcript = transcript.clone();
-        async move { crate::call_openrouter_ai(&client, &key, &transcript).await }
+        let vault_context = vault_context.clone();
+        async move {
+            crate::call_openrouter_ai(&client, &key, &transcript, vault_context.as_deref()).await
+        }
     })
     .await;
 

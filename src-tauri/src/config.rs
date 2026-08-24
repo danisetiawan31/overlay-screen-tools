@@ -95,6 +95,8 @@ pub struct Config {
     #[serde(default)]
     pub last_opened_notes_path: Option<String>,
     #[serde(default)]
+    pub obsidian_vault_path: Option<String>,
+    #[serde(default)]
     pub hotkeys: HotkeysConfig,
 }
 
@@ -106,6 +108,7 @@ impl Default for Config {
             window_bounds: WindowBounds::default(),
             font_size: DEFAULT_FONT_SIZE,
             last_opened_notes_path: None,
+            obsidian_vault_path: None,
             hotkeys: HotkeysConfig::default(),
         }
     }
@@ -300,6 +303,37 @@ pub fn update_config_last_opened_notes_path(
     };
 
     config.last_opened_notes_path = path;
+    save_config(app_data_dir, &config)?;
+
+    Ok(config)
+}
+
+/// Memperbarui field `obsidian_vault_path` di `config.json`.
+pub fn update_config_obsidian_vault_path(
+    app_data_dir: &Path,
+    path: Option<String>,
+) -> Result<Config, String> {
+    let config_path = get_config_path(app_data_dir);
+    let mut config = if config_path.exists() {
+        let raw = fs::read_to_string(&config_path).map_err(|err| {
+            format!(
+                "Gagal membaca file config.json di '{}': {}",
+                config_path.display(),
+                err
+            )
+        })?;
+        let clean = raw.trim_start_matches('\u{feff}').trim();
+        serde_json::from_str::<Config>(clean).map_err(|err| {
+            format!(
+                "Format JSON di config.json tidak valid / malformed: {}",
+                err
+            )
+        })?
+    } else {
+        Config::default()
+    };
+
+    config.obsidian_vault_path = path;
     save_config(app_data_dir, &config)?;
 
     Ok(config)
@@ -742,5 +776,59 @@ mod tests {
         assert_eq!(from_disk2.last_opened_notes_path, None);
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_update_config_obsidian_vault_path_persists_to_disk() {
+        let temp_dir = std::env::temp_dir().join("poc_overlay_test_vault_path");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let test_vault = "D:\\project\\personal-vault".to_string();
+        let updated =
+            update_config_obsidian_vault_path(&temp_dir, Some(test_vault.clone())).unwrap();
+        assert_eq!(updated.obsidian_vault_path, Some(test_vault.clone()));
+
+        let file_path = get_config_path(&temp_dir);
+        let raw = fs::read_to_string(&file_path).unwrap();
+        let from_disk: Config = serde_json::from_str(&raw).unwrap();
+        assert_eq!(from_disk.obsidian_vault_path, Some(test_vault));
+
+        // Test updating to None
+        let updated_none = update_config_obsidian_vault_path(&temp_dir, None).unwrap();
+        assert_eq!(updated_none.obsidian_vault_path, None);
+        let raw2 = fs::read_to_string(&file_path).unwrap();
+        let from_disk2: Config = serde_json::from_str(&raw2).unwrap();
+        assert_eq!(from_disk2.obsidian_vault_path, None);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_config_obsidian_vault_path_missing_or_null_defaults_to_none() {
+        let json_missing = r#"{
+            "openrouterApiKeys": ["sk-or-test"],
+            "groqApiKeys": ["gsk-test"]
+        }"#;
+        let parsed_missing: Config = serde_json::from_str(json_missing).unwrap();
+        assert_eq!(parsed_missing.obsidian_vault_path, None);
+
+        let json_null = r#"{
+            "openrouterApiKeys": ["sk-or-test"],
+            "groqApiKeys": ["gsk-test"],
+            "obsidianVaultPath": null
+        }"#;
+        let parsed_null: Config = serde_json::from_str(json_null).unwrap();
+        assert_eq!(parsed_null.obsidian_vault_path, None);
+
+        let json_with_val = r#"{
+            "openrouterApiKeys": ["sk-or-test"],
+            "groqApiKeys": ["gsk-test"],
+            "obsidianVaultPath": "D:\\project\\personal-vault"
+        }"#;
+        let parsed_val: Config = serde_json::from_str(json_with_val).unwrap();
+        assert_eq!(
+            parsed_val.obsidian_vault_path,
+            Some("D:\\project\\personal-vault".to_string())
+        );
     }
 }

@@ -24,6 +24,9 @@
   Catatan: POC capture-exclusion WDA_EXCLUDEFROMCAPTURE terverifikasi penuh pada main HWND dan seluruh child WebView2; Win32 SetWindowPos native untuk reposisi off-screen Normal <-> Concealed tanpa bug rendering.
   Addendum (Window properties & font size): Pemanggilan `apply_stealth` ditambahkan ke handler `WindowEvent::Resized` untuk memastikan re-apply proteksi otomatis jika terjadi alokasi render surface baru pada WebView2 saat drag-resize window.
   Addendum (Notes/Teleprompter mode): Ditambahkan background watcher thread (`spawn_dialog_watcher_thread`) yang melakukan polling `EnumWindows` + `GetWindowThreadProcessId` (PID filter via `GetCurrentProcessId`, exclude main HWND, timeout 5s, poll interval 30ms) untuk mengaplikasikan `SetWindowDisplayAffinity(dialog_hwnd, WDA_EXCLUDEFROMCAPTURE)` pada HWND modal file picker dialog Windows tepat sebelum `blocking_pick_file()` dipanggil; 50 unit test backend dan 42 unit test frontend lolos.
+- [x] Obsidian Knowledge Vault Context Injection (Live Q&A RAG Mode) — selesai, spec: implementation_plan.md
+  Catatan: Field `obsidianVaultPath` ditambahkan ke `config.json` dan `Config` struct; modul `vault.rs` memindai file `.md` secara rekursif (melewati folder internal dan membatasi ukuran file per-catatan); algoritma ekstraksi kata kunci cerdas dengan pemfilteran stopword multi-bahasa serta dukungan istilah tech 2 huruf (`AI`, `UI`, `UX`, `DB`, `JS`, `TS`); scoring relevansi cerdas dengan boost (+25) untuk dokumen profil/CV pada pertanyaan perkenalan diri; system prompt dikonfigurasi ke first-person candidate persona ("Saya") dengan instruksi bahasa dinamis; 60 unit test backend dan 42 unit test frontend lolos 100%.
+
 
 
 

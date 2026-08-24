@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod config;
+pub mod vault;
 
 use config::{Config, ConfigErrorPayload};
 use serde::{Deserialize, Serialize};
@@ -25,7 +26,7 @@ pub const MAIN_TRAY_ID: &str = "main-tray";
 /// Tooltip default untuk tray icon saat status idle / normal.
 pub const DEFAULT_TRAY_TOOLTIP: &str = "Screen Overlay Tool";
 /// Tooltip tray icon saat hotkey push-to-talk F8 sedang merekam audio (PRD §3.3).
-pub const RECORDING_TRAY_TOOLTIP: &str = "Screen Overlay Tool — Recording...";
+pub const RECORDING_TRAY_TOOLTIP: &str = "Screen Overlay Tool \u{2014} Recording...";
 
 /// Memperbarui tooltip tray icon untuk menandakan status recording audio secara visual (PRD §3.3).
 pub fn update_tray_recording_state(app: &tauri::AppHandle, is_recording: bool) {
@@ -374,11 +375,12 @@ pub async fn call_groq_stt(
     Ok(parsed.text)
 }
 
-/// Helper untuk memanggil OpenRouter Chat Completion API.
+/// Helper untuk memanggil OpenRouter Chat Completion API dengan dukungan konteks Obsidian Vault opsional.
 pub async fn call_openrouter_ai(
     client: &reqwest::Client,
     key: &str,
     transcript: &str,
+    vault_context: Option<&str>,
 ) -> Result<String, (Option<reqwest::StatusCode>, String)> {
     #[derive(Serialize)]
     struct Message {
@@ -388,16 +390,48 @@ pub async fn call_openrouter_ai(
 
     #[derive(Serialize)]
     struct OpenRouterRequest {
-        model: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        models: Option<Vec<String>>,
         messages: Vec<Message>,
     }
 
+    let core_profile = "\
+### CANDIDATE CORE IDENTITY & BACKGROUND:
+- **Name**: Ahmad Dhani Setiawan
+- **Role**: Fullstack Software Engineer
+- **Core Tech Stack**: TypeScript, JavaScript, Go, Python, PHP, Next.js, React, Angular, NestJS, Laravel, FastAPI, PostgreSQL, MySQL, Redis, Docker, Vitest, Playwright.
+- **Flagship Projects**:
+  1. **Klinik RME** (Go, sqlc, Angular 21, PostgreSQL, WebSocket) — Electronic Medical Record & Queue System with pessimistic row locking (`FOR UPDATE SKIP LOCKED`) and SHA-256 tamper-evident audit trail.
+  2. **Attendance & Workforce Management** (NestJS, Python FastAPI, PostgreSQL) — Spoof-resistant attendance with DeepFace AI facial verification and Haversine GPS geofencing.
+  3. **Vehicle Booking Management** (Laravel 11, PostgreSQL) — Fleet reservation with 2-tier state machine approval and schedule collision prevention.
+  4. **Fishing Pond POS** (CodeIgniter 4, MySQL) — Point of Sale with dynamic duration billing and ESC/POS thermal printing.
+- **Communication Style**: First-person ('Saya' / 'I'), concise, confident, structured (2-4 bullet points or short paragraphs), grounded in real technical facts.";
+
+    let system_content = if let Some(context) = vault_context {
+        format!(
+            "You are the candidate / professional in a live job interview or meeting. You are speaking directly in the first person ('Saya' / 'I'). NEVER introduce yourself as an AI, bot, virtual assistant, or third party. Answer questions directly as yourself with concise, high-density talking points and bullet points (2-4 bullet points). Always answer in the same language as the question (e.g., Bahasa Indonesia if asked in Indonesian, English if asked in English).\n\n{}\n\n--- RELEVANT NOTES FROM YOUR PERSONAL KNOWLEDGE VAULT ---\n{}\n--------------------------------------------------------",
+            core_profile, context
+        )
+    } else {
+        format!(
+            "You are the candidate / professional in a live job interview or meeting. You are speaking directly in the first person ('Saya' / 'I'). NEVER introduce yourself as an AI, bot, virtual assistant, or third party. Answer questions directly as yourself with concise, high-density talking points and bullet points (2-4 bullet points). Always answer in the same language as the question (e.g., Bahasa Indonesia if asked in Indonesian, English if asked in English).\n\n{}",
+            core_profile
+        )
+    };
+
     let request_payload = OpenRouterRequest {
-        model: "nvidia/nemotron-3.5-lightning:free".to_string(),
+        model: None,
+        models: Some(vec![
+            "nvidia/nemotron-3-super-120b-a12b:free".to_string(),
+            "dots-studio/dots-3-note-preview:free".to_string(),
+            "cohere/north-mini-code:free".to_string(),
+        ]),
         messages: vec![
             Message {
                 role: "system".to_string(),
-                content: "You are a live assistant providing concise, high-density talking points to help a speaker answer live audience questions clearly and directly. Keep answers brief (2-4 bullet points or short paragraphs), accurate, and immediately readable.".to_string(),
+                content: system_content,
             },
             Message {
                 role: "user".to_string(),
@@ -428,32 +462,37 @@ pub async fn call_openrouter_ai(
         return Err((Some(status), err_body));
     }
 
-    #[derive(Deserialize)]
-    struct MessageContent {
-        content: String,
-    }
+    let raw_text = response.text().await.map_err(|e| {
+        (
+            Some(status),
+            format!("Gagal membaca body response OpenRouter: {}", e),
+        )
+    })?;
 
-    #[derive(Deserialize)]
-    struct Choice {
-        message: MessageContent,
-    }
-
-    #[derive(Deserialize)]
-    struct OpenRouterResponse {
-        choices: Vec<Choice>,
-    }
-
-    let parsed = response
-        .json::<OpenRouterResponse>()
-        .await
+    let json_val: serde_json::Value = serde_json::from_str(&raw_text)
         .map_err(|e| (Some(status), format!("Gagal parse JSON OpenRouter: {}", e)))?;
 
-    if let Some(choice) = parsed.choices.into_iter().next() {
-        Ok(choice.message.content)
+    if let Some(content) = json_val
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+    {
+        Ok(content.to_string())
+    } else if let Some(err_msg) = json_val
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+    {
+        Err((Some(status), format!("OpenRouter error: {}", err_msg)))
     } else {
         Err((
             Some(status),
-            "OpenRouter mengembalikan choices kosong".to_string(),
+            format!(
+                "OpenRouter mengembalikan response tidak terduga: {}",
+                raw_text
+            ),
         ))
     }
 }
@@ -969,6 +1008,7 @@ pub fn run() {
                             window_bounds: config::WindowBounds::default(),
                             font_size: config::DEFAULT_FONT_SIZE,
                             last_opened_notes_path: None,
+                            obsidian_vault_path: None,
                             hotkeys: config::HotkeysConfig::default(),
                         };
                         let state = app.state::<Mutex<OverlayState>>();
