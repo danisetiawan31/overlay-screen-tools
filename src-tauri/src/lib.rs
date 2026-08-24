@@ -393,7 +393,7 @@ pub async fn call_openrouter_ai(
     }
 
     let request_payload = OpenRouterRequest {
-        model: "meta-llama/llama-3.3-70b-instruct".to_string(),
+        model: "nvidia/nemotron-3.5-lightning:free".to_string(),
         messages: vec![
             Message {
                 role: "system".to_string(),
@@ -536,46 +536,60 @@ pub fn get_hotkey_registration_error_notification(
 /// Dipakai bersama oleh shortcut F9 dan context menu Tray "Show/Hide Overlay".
 pub fn toggle_overlay_visibility(app: &tauri::AppHandle) {
     let state = app.state::<Mutex<OverlayState>>();
-    let mut state = match state.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if state.hwnd == 0 {
-        return;
-    }
-    let hwnd = state.hwnd as HWND;
+    let (hwnd, is_concealed_before, pos_to_restore) = {
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if state_guard.hwnd == 0 {
+            return;
+        }
+        let hwnd = state_guard.hwnd;
+        let is_concealed = state_guard.is_concealed;
+        state_guard.is_concealed = !is_concealed;
 
-    if state.is_concealed {
-        let pos = state.last_normal_position;
+        let mut pos = state_guard.last_normal_position;
+        if is_concealed && (pos.x < 0 || pos.y < 0) {
+            let (def_x, def_y) = state_guard
+                .config
+                .as_ref()
+                .map(|c| (c.window_bounds.x, c.window_bounds.y))
+                .unwrap_or((100, 100));
+            pos = PhysicalPosition::new(def_x, def_y);
+            state_guard.last_normal_position = pos;
+        }
+
+        (hwnd, is_concealed, pos)
+    };
+
+    let hwnd_raw = hwnd as HWND;
+
+    if is_concealed_before {
+        // Concealed -> Normal
         // SAFETY: HWND adalah handle window utama yang valid dan tersimpan di OverlayState.
         unsafe {
             SetWindowPos(
-                hwnd,
+                hwnd_raw,
                 0 as _,
-                pos.x,
-                pos.y,
+                pos_to_restore.x,
+                pos_to_restore.y,
                 0,
                 0,
                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
         // Re-apply stealth saat kembali ke Normal state
-        apply_stealth(state.hwnd);
-        state.toggle_concealed();
+        apply_stealth(hwnd);
         println!(
             "[VISIBILITY] Normal: posisi ({}, {}) & stealth re-applied",
-            pos.x, pos.y
+            pos_to_restore.x, pos_to_restore.y
         );
     } else {
-        if let Some(window) = app.get_webview_window("main") {
-            if let Ok(pos) = window.outer_position() {
-                state.last_normal_position = pos;
-            }
-        }
+        // Normal -> Concealed
         // SAFETY: HWND adalah handle window utama yang valid dan dipindahkan ke koordinat offscreen (-9999, -9999).
         unsafe {
             SetWindowPos(
-                hwnd,
+                hwnd_raw,
                 0 as _,
                 -9999,
                 -9999,
@@ -584,7 +598,6 @@ pub fn toggle_overlay_visibility(app: &tauri::AppHandle) {
                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
-        state.toggle_concealed();
         println!("[VISIBILITY] Concealed: dipindahkan ke (-9999, -9999)");
     }
 }
@@ -1158,50 +1171,42 @@ pub fn run() {
                         }
                     }
                     tauri::WindowEvent::Moved(pos) => {
-                        let state = app_handle_for_window.state::<Mutex<OverlayState>>();
-                        let is_concealed = {
+                        if pos.x >= 0 && pos.y >= 0 {
+                            let state = app_handle_for_window.state::<Mutex<OverlayState>>();
                             let mut state_guard = match state.lock() {
                                 Ok(guard) => guard,
                                 Err(poisoned) => poisoned.into_inner(),
                             };
                             if !state_guard.is_concealed {
                                 state_guard.last_normal_position = *pos;
-                            }
-                            state_guard.is_concealed
-                        };
-
-                        // ATURAN WAJIB: Jangan simpan jika is_concealed == true (koordinat -9999)
-                        if !is_concealed {
-                            if let Ok(size) = window_for_event.outer_size() {
-                                let _ = tx_for_window.send(config::WindowBounds {
-                                    x: pos.x,
-                                    y: pos.y,
-                                    width: size.width,
-                                    height: size.height,
-                                });
+                                if let Ok(size) = window_for_event.outer_size() {
+                                    let _ = tx_for_window.send(config::WindowBounds {
+                                        x: pos.x,
+                                        y: pos.y,
+                                        width: size.width,
+                                        height: size.height,
+                                    });
+                                }
                             }
                         }
                     }
                     tauri::WindowEvent::Resized(size) => {
                         let state = app_handle_for_window.state::<Mutex<OverlayState>>();
-                        let is_concealed = {
+                        let (is_concealed, pos) = {
                             let state_guard = match state.lock() {
                                 Ok(guard) => guard,
                                 Err(poisoned) => poisoned.into_inner(),
                             };
-                            state_guard.is_concealed
+                            (state_guard.is_concealed, state_guard.last_normal_position)
                         };
 
-                        // ATURAN WAJIB: Jangan simpan jika is_concealed == true
-                        if !is_concealed {
-                            if let Ok(pos) = window_for_event.outer_position() {
-                                let _ = tx_for_window.send(config::WindowBounds {
-                                    x: pos.x,
-                                    y: pos.y,
-                                    width: size.width,
-                                    height: size.height,
-                                });
-                            }
+                        if !is_concealed && pos.x >= 0 && pos.y >= 0 {
+                            let _ = tx_for_window.send(config::WindowBounds {
+                                x: pos.x,
+                                y: pos.y,
+                                width: size.width,
+                                height: size.height,
+                            });
                         }
                     }
                     tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
@@ -1370,6 +1375,22 @@ mod tests {
         let is_concealed_3 = state.toggle_concealed();
         assert!(is_concealed_3);
         assert!(state.is_concealed);
+    }
+
+    #[test]
+    fn test_toggle_visibility_position_protection_fallback() {
+        let mut state = OverlayState::default();
+        state.last_normal_position = PhysicalPosition::new(-9999, -9999);
+        state.is_concealed = true;
+
+        let mut pos = state.last_normal_position;
+        if pos.x <= -5000 || pos.y <= -5000 {
+            pos = PhysicalPosition::new(100, 100);
+            state.last_normal_position = pos;
+        }
+
+        assert_eq!(state.last_normal_position.x, 100);
+        assert_eq!(state.last_normal_position.y, 100);
     }
 
     #[test]

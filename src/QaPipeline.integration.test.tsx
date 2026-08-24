@@ -10,15 +10,45 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-  let recordingStartedCb: Function | null = null;
+  let recordingStartedCbs: Function[] = [];
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-  let recordingEndedCb: Function | null = null;
+  let recordingEndedCbs: Function[] = [];
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-  let transcriptResultCb: Function | null = null;
+  let transcriptResultCbs: Function[] = [];
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-  let answerResultCb: Function | null = null;
+  let answerResultCbs: Function[] = [];
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-  let qaErrorCb: Function | null = null;
+  let qaErrorCbs: Function[] = [];
+
+  const triggerRecordingStarted = async () => {
+    for (const cb of recordingStartedCbs) {
+      await cb({ event: "qa:recording-started", id: 1, payload: undefined });
+    }
+  };
+
+  const triggerRecordingEnded = async (payload: { belowThreshold: boolean }) => {
+    for (const cb of recordingEndedCbs) {
+      await cb({ payload });
+    }
+  };
+
+  const triggerTranscriptResult = async (payload: { text: string }) => {
+    for (const cb of transcriptResultCbs) {
+      await cb({ payload });
+    }
+  };
+
+  const triggerAnswerResult = async (payload: { text: string }) => {
+    for (const cb of answerResultCbs) {
+      await cb({ payload });
+    }
+  };
+
+  const triggerQaError = async (payload: { stage: string; message: string }) => {
+    for (const cb of qaErrorCbs) {
+      await cb({ payload });
+    }
+  };
 
   let mockRecorderInstance: {
     start: ReturnType<typeof vi.fn>;
@@ -32,11 +62,11 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    recordingStartedCb = null;
-    recordingEndedCb = null;
-    transcriptResultCb = null;
-    answerResultCb = null;
-    qaErrorCb = null;
+    recordingStartedCbs = [];
+    recordingEndedCbs = [];
+    transcriptResultCbs = [];
+    answerResultCbs = [];
+    qaErrorCbs = [];
 
     // Mock App state
     vi.spyOn(commands, "getAppState").mockResolvedValue({
@@ -57,28 +87,28 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
     // Mock Tauri event listeners
     vi.mocked(listen).mockImplementation((event, cb) => {
       if (event === "qa:recording-started") {
-        recordingStartedCb = cb;
+        recordingStartedCbs.push(cb);
       }
       return Promise.resolve(vi.fn());
     });
 
     vi.spyOn(events.qaRecordingEnded, "listen").mockImplementation((cb) => {
-      recordingEndedCb = cb;
+      recordingEndedCbs.push(cb);
       return Promise.resolve(vi.fn());
     });
 
     vi.spyOn(events.transcriptResult, "listen").mockImplementation((cb) => {
-      transcriptResultCb = cb;
+      transcriptResultCbs.push(cb);
       return Promise.resolve(vi.fn());
     });
 
     vi.spyOn(events.answerResult, "listen").mockImplementation((cb) => {
-      answerResultCb = cb;
+      answerResultCbs.push(cb);
       return Promise.resolve(vi.fn());
     });
 
     vi.spyOn(events.qaError, "listen").mockImplementation((cb) => {
-      qaErrorCb = cb;
+      qaErrorCbs.push(cb);
       return Promise.resolve(vi.fn());
     });
 
@@ -151,9 +181,7 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
     // 2. Trigger F8 Press (E2E simulasi) -> emit qa:recording-started
     await act(async () => {
-      if (recordingStartedCb) {
-        await recordingStartedCb({ event: "qa:recording-started", id: 1, payload: undefined });
-      }
+      await triggerRecordingStarted();
     });
 
     // Auto-switch ke tab Q&A dan mulai merekam
@@ -169,9 +197,7 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
     // 3. Trigger F8 Release (>400ms hold) -> emit qa:recording-ended { belowThreshold: false }
     await act(async () => {
-      if (recordingEndedCb) {
-        await recordingEndedCb({ payload: { belowThreshold: false } });
-      }
+      await triggerRecordingEnded({ belowThreshold: false });
     });
 
     expect(commands.sendAudioBlob).toHaveBeenCalledTimes(1);
@@ -179,11 +205,9 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
     // 4. Emisi transcript:result (Groq STT selesai, non-blocking sebelum AI selesai)
     await act(async () => {
-      if (transcriptResultCb) {
-        transcriptResultCb({
-          payload: { text: "Bagaimana arsitektur memory model di Rust?" },
-        });
-      }
+      await triggerTranscriptResult({
+        text: "Bagaimana arsitektur memory model di Rust?",
+      });
     });
 
     expect(screen.getByText("Bagaimana arsitektur memory model di Rust?")).toBeInTheDocument();
@@ -191,13 +215,9 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
     // 5. Emisi answer:result (OpenRouter AI selesai)
     await act(async () => {
-      if (answerResultCb) {
-        answerResultCb({
-          payload: {
-            text: "### Memory Model Rust\n- **Ownership & Borrowing**: Menjamin memory safety tanpa GC\n- **RAII**: Resource dibebaskan otomatis saat out of scope",
-          },
-        });
-      }
+      await triggerAnswerResult({
+        text: "### Memory Model Rust\n- **Ownership & Borrowing**: Menjamin memory safety tanpa GC\n- **RAII**: Resource dibebaskan otomatis saat out of scope",
+      });
     });
 
     expect(screen.getByRole("heading", { level: 3, name: "Memory Model Rust" })).toBeInTheDocument();
@@ -214,9 +234,7 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
     // Request 1: Start & End
     await act(async () => {
-      if (recordingStartedCb) {
-        await recordingStartedCb();
-      }
+      await triggerRecordingStarted();
     });
 
     const fakeChunk1 = new Blob(["audio-req-1"], { type: "audio/webm" });
@@ -225,18 +243,14 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
     }
 
     await act(async () => {
-      if (recordingEndedCb) {
-        await recordingEndedCb({ payload: { belowThreshold: false } });
-      }
+      await triggerRecordingEnded({ belowThreshold: false });
     });
 
     expect(commands.sendAudioBlob).toHaveBeenCalledTimes(1);
 
     // Sebelum Request 1 selesai, user menekan F8 lagi untuk pertanyaan baru (Request 2)
     await act(async () => {
-      if (recordingStartedCb) {
-        await recordingStartedCb();
-      }
+      await triggerRecordingStarted();
     });
 
     expect(screen.getByText(/Merekam suara.../i)).toBeInTheDocument();
@@ -247,25 +261,15 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
     }
 
     await act(async () => {
-      if (recordingEndedCb) {
-        await recordingEndedCb({ payload: { belowThreshold: false } });
-      }
+      await triggerRecordingEnded({ belowThreshold: false });
     });
 
     expect(commands.sendAudioBlob).toHaveBeenCalledTimes(2);
 
     // Event Request 2 (generasi terbaru) tiba
     await act(async () => {
-      if (transcriptResultCb) {
-        transcriptResultCb({
-          payload: { text: "Pertanyaan Generasi Terbaru" },
-        });
-      }
-      if (answerResultCb) {
-        answerResultCb({
-          payload: { text: "Jawaban Generasi Terbaru" },
-        });
-      }
+      await triggerTranscriptResult({ text: "Pertanyaan Generasi Terbaru" });
+      await triggerAnswerResult({ text: "Jawaban Generasi Terbaru" });
     });
 
     // UI hanya menampilkan konten dari request terbaru
@@ -283,18 +287,14 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
     // Quick press F8
     await act(async () => {
-      if (recordingStartedCb) {
-        await recordingStartedCb();
-      }
+      await triggerRecordingStarted();
     });
 
     expect(mockRecorderInstance.start).toHaveBeenCalledTimes(1);
 
     // Quick release F8 (<400ms)
     await act(async () => {
-      if (recordingEndedCb) {
-        await recordingEndedCb({ payload: { belowThreshold: true } });
-      }
+      await triggerRecordingEnded({ belowThreshold: true });
     });
 
     // Tidak ada pemanggilan command backend
@@ -317,9 +317,7 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
     // F8 Press
     await act(async () => {
-      if (recordingStartedCb) {
-        await recordingStartedCb();
-      }
+      await triggerRecordingStarted();
     });
 
     // Banner error lokal muncul
@@ -329,9 +327,7 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
     // F8 Release
     await act(async () => {
-      if (recordingEndedCb) {
-        await recordingEndedCb({ payload: { belowThreshold: false } });
-      }
+      await triggerRecordingEnded({ belowThreshold: false });
     });
 
     // Tidak pernah menyentuh core command
@@ -351,14 +347,10 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
     // Simulasi core memancarkan qa:error setelah semua fallback key gagal
     await act(async () => {
-      if (qaErrorCb) {
-        qaErrorCb({
-          payload: {
-            stage: "stt",
-            message: "HTTP 429 Too Many Requests: Rate limit exceeded on all Groq keys",
-          },
-        });
-      }
+      await triggerQaError({
+        stage: "stt",
+        message: "HTTP 429 Too Many Requests: Rate limit exceeded on all Groq keys",
+      });
     });
 
     const alert = screen.getByRole("alert");
