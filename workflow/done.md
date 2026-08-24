@@ -6,12 +6,13 @@
   Catatan: CI (.github/workflows/ci.yml) & Dependabot (.github/dependabot.yml) telah dikonfigurasi dan dipush ke GitHub.
 - [x] Config persistence (Backend/Core) — selesai, spec: docs/TDD.md §7 & docs/api-contract.md §2
   Catatan: sesuai spec. Memuat config.json dari app_data_dir() saat setup, emit config:error jika missing/malformed/empty key, dan unit test 4 skenario lolos.
+  Addendum: Ditambahkan atribut `#[tauri_specta(event_name = "config:error")]` pada `ConfigErrorPayload` agar event name yang digenerate ke TypeScript sesuai dengan kontrak domain:action.
 - [x] Window properties & font size (Tahap 1 & 2: fontSize & windowBounds) — selesai, spec: docs/TDD.md §8 & docs/api-contract.md §1 & §4
   Catatan: sesuai spec. Command update_font_size divalidasi range 10-32px & diekspor via tauri-specta; windowBounds divalidasi terhadap monitor aktif saat startup, event Moved/Resized di-debounce (500ms) dengan proteksi is_concealed dan flush-on-exit; 14 unit test lolos.
 - [x] Tray icon & app lifecycle (Tahap 1 & 2: tray, menu, quit flow & notification wiring) — selesai, spec: docs/TDD.md §9 & docs/PRD.md §3.3 & AGENTS §10
   Catatan: sesuai spec. Inisialisasi TrayIconBuilder dengan context menu 2 item ("Show/Hide Overlay" & "Quit"); logic toggle diekstrak ke toggle_overlay_visibility dengan OverlayState::toggle_concealed; menu Quit memicu close lifecycle & flush-on-exit windowBounds; plugin notification dikonfigurasi pada kegagalan F9 dan config:error; 17 unit test lolos.
 - [x] Global hotkeys (Tahap 1 & 2: registrasi F8, E2E flag, get_app_state, recording-started/ended events) — selesai, spec: docs/TDD.md §4 & §5 & docs/api-contract.md §1 & §2
-  Catatan: sesuai spec. Shortcut F8 & F9 dikonfigurasi dengan graceful degradation dan tray notification; E2E_TEST_MODE melewati shortcut fisik dan mengekspos command test_trigger_hotkey yang di-gate compile-time (#[cfg(debug_assertions)]); command get_app_state mengekspos sanitized AppState; event qa:recording-started dan qa:recording-ended (RecordingEndedPayload { belowThreshold }) di-emit dengan threshold hold 400ms dan proteksi idempotency key-repeat OS; 27 unit test lolos.
+  Catatan: sesuai spec. Shortcut F8 & F9 dikonfigurasi dengan graceful degradation dan tray notification; E2E_TEST_MODE melewati shortcut fisik dan mengekspos command test_trigger_hotkey yang di-gate compile-time (#[cfg(debug_assertions)]); command get_app_state mengekspos sanitized AppState; event qa:recording-started dan qa:recording-ended (RecordingEndedPayload { belowThreshold } dengan `#[tauri_specta(event_name = "qa:recording-ended")]`) di-emit dengan threshold hold 400ms dan proteksi idempotency key-repeat OS; 27 unit test lolos.
 
 
 

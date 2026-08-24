@@ -74,6 +74,7 @@ impl Default for Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, tauri_specta::Event)]
+#[tauri_specta(event_name = "config:error")]
 pub struct ConfigErrorPayload {
     pub message: String,
 }

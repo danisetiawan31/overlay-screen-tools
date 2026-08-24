@@ -12,8 +12,8 @@ export const commands = {
 
 /** Events */
 export const events = {
-	configErrorPayload: makeEvent<ConfigErrorPayload>("config-error-payload"),
-	recordingEndedPayload: makeEvent<RecordingEndedPayload>("recording-ended-payload"),
+	configError: makeEvent<ConfigErrorPayload>("config:error"),
+	qaRecordingEnded: makeEvent<RecordingEndedPayload>("qa:recording-ended"),
 };
 
 /* Types */

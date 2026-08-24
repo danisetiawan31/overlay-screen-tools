@@ -23,6 +23,7 @@ pub const PUSH_TO_TALK_MIN_HOLD_MS: u64 = 400;
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "qa:recording-ended")]
 pub struct RecordingEndedPayload {
     pub below_threshold: bool,
 }
