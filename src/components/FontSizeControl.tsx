@@ -1,0 +1,48 @@
+import React from "react";
+
+export const MIN_FONT_SIZE = 10;
+export const MAX_FONT_SIZE = 32;
+
+export interface FontSizeControlProps {
+  fontSize: number;
+  onUpdateFontSize: (newSize: number) => void;
+  disabled?: boolean;
+}
+
+export const FontSizeControl: React.FC<FontSizeControlProps> = ({
+  fontSize,
+  onUpdateFontSize,
+  disabled = false,
+}) => {
+  const isAtMin = fontSize <= MIN_FONT_SIZE;
+  const isAtMax = fontSize >= MAX_FONT_SIZE;
+
+  return (
+    <div className="flex items-center space-x-1.5 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800/80 text-xs select-none">
+      <span className="text-zinc-500 text-[10px] uppercase font-semibold mr-0.5">Font</span>
+      <button
+        type="button"
+        aria-label="Decrease font size"
+        disabled={disabled || isAtMin}
+        onClick={() => onUpdateFontSize(fontSize - 1)}
+        className="w-5 h-5 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-200 transition-colors font-bold text-xs"
+      >
+        −
+      </button>
+      <span className="text-xs font-mono text-zinc-300 min-w-[28px] text-center">
+        {fontSize}px
+      </span>
+      <button
+        type="button"
+        aria-label="Increase font size"
+        disabled={disabled || isAtMax}
+        onClick={() => onUpdateFontSize(fontSize + 1)}
+        className="w-5 h-5 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-200 transition-colors font-bold text-xs"
+      >
+        +
+      </button>
+    </div>
+  );
+};
+
+export default FontSizeControl;

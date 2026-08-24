@@ -13,6 +13,8 @@
   Catatan: sesuai spec. Inisialisasi TrayIconBuilder dengan context menu 2 item ("Show/Hide Overlay" & "Quit"); logic toggle diekstrak ke toggle_overlay_visibility dengan OverlayState::toggle_concealed; menu Quit memicu close lifecycle & flush-on-exit windowBounds; plugin notification dikonfigurasi pada kegagalan F9 dan config:error; 17 unit test lolos.
 - [x] Global hotkeys (Tahap 1 & 2: registrasi F8, E2E flag, get_app_state, recording-started/ended events) — selesai, spec: docs/TDD.md §4 & §5 & docs/api-contract.md §1 & §2
   Catatan: sesuai spec. Shortcut F8 & F9 dikonfigurasi dengan graceful degradation dan tray notification; E2E_TEST_MODE melewati shortcut fisik dan mengekspos command test_trigger_hotkey yang di-gate compile-time (#[cfg(debug_assertions)]); command get_app_state mengekspos sanitized AppState; event qa:recording-started dan qa:recording-ended (RecordingEndedPayload { belowThreshold } dengan `#[tauri_specta(event_name = "qa:recording-ended")]`) di-emit dengan threshold hold 400ms dan proteksi idempotency key-repeat OS; 27 unit test lolos.
+- [x] App shell (Tahap 1 & 2: app state, font size control, tab Notes/Q&A, & auto-switch) — selesai, spec: docs/PRD.md §3.2 poin 4 & §4 & docs/api-contract.md §1 & §2
+  Catatan: sesuai spec. Fetch getAppState saat initial mount dengan penanganan discriminated union typedError<T,E>; kontrol FontSizeControl dengan boundary check 10-32px; komponen TabNav untuk navigasi tab Notes dan Live Q&A; auto-switch on qa:recording-started dengan anti-stale ref qaAvailableRef dan cleanup unlisten saat unmount; double guard visual & interaksi saat qaAvailable false; 18 frontend unit test dan 27 backend unit test lolos.
 
 
 
