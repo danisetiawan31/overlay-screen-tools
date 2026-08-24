@@ -1191,6 +1191,10 @@ pub fn run() {
                         }
                     }
                     tauri::WindowEvent::Resized(size) => {
+                        if hwnd_for_window != 0 {
+                            apply_stealth(hwnd_for_window);
+                        }
+
                         let state = app_handle_for_window.state::<Mutex<OverlayState>>();
                         let (is_concealed, pos) = {
                             let state_guard = match state.lock() {

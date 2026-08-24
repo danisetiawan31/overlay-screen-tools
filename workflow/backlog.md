@@ -4,7 +4,7 @@ Fitur diturunkan dari `docs/PRD.md` Section 3 & 4. Status tracking (progress per
 
 ## MVP
 
-- [ ] **Stealth capture-exclusion** — Ref: TDD §3. Termasuk verifikasi resize window (drag resize-handle) dan native file dialog pakai capture software sebelum item ini ditutup.
+- [x] **Stealth capture-exclusion** — Ref: TDD §3. Termasuk verifikasi resize window (drag resize-handle) dan native file dialog pakai capture software sebelum item ini ditutup.
 - [x] **Config persistence** — Ref: TDD §7, api-contract §2 (`config:error`).
 - [x] **Window properties & font size** (termasuk resizable + `windowBounds` via move & resize event) — Ref: TDD §8, api-contract §1 (`update_font_size`), api-contract §4 (`windowBounds`).
 - [x] **Tray icon & app lifecycle** (termasuk notifikasi kegagalan registrasi F9) — Ref: TDD §9, TDD §4.
