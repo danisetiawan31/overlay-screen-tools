@@ -13,12 +13,36 @@ pub const MAX_FONT_SIZE: u32 = 32;
 // core (Rust). Struct ini TIDAK BOLEH mengimplementasikan `specta::Type` atau di-expose ke IPC
 // frontend agar API key (openrouterApiKey & groqApiKey) tidak pernah bocor ke webview.
 
+fn default_font_size() -> u32 {
+    DEFAULT_FONT_SIZE
+}
+
+fn default_window_x() -> i32 {
+    100
+}
+
+fn default_window_y() -> i32 {
+    100
+}
+
+fn default_window_width() -> u32 {
+    550
+}
+
+fn default_window_height() -> u32 {
+    350
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowBounds {
+    #[serde(default = "default_window_x")]
     pub x: i32,
+    #[serde(default = "default_window_y")]
     pub y: i32,
+    #[serde(default = "default_window_width")]
     pub width: u32,
+    #[serde(default = "default_window_height")]
     pub height: u32,
 }
 
@@ -33,10 +57,20 @@ impl Default for WindowBounds {
     }
 }
 
+fn default_push_to_talk() -> String {
+    "F8".to_string()
+}
+
+fn default_toggle_visibility() -> String {
+    "F9".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeysConfig {
+    #[serde(default = "default_push_to_talk")]
     pub push_to_talk: String,
+    #[serde(default = "default_toggle_visibility")]
     pub toggle_visibility: String,
 }
 
@@ -54,9 +88,13 @@ impl Default for HotkeysConfig {
 pub struct Config {
     pub openrouter_api_keys: Vec<String>,
     pub groq_api_keys: Vec<String>,
+    #[serde(default)]
     pub window_bounds: WindowBounds,
+    #[serde(default = "default_font_size")]
     pub font_size: u32,
+    #[serde(default)]
     pub last_opened_notes_path: Option<String>,
+    #[serde(default)]
     pub hotkeys: HotkeysConfig,
 }
 
@@ -113,7 +151,8 @@ pub fn load_config(app_data_dir: &Path) -> Result<Config, String> {
 
 /// Parse string JSON ke struct `Config` dan validasi API keys.
 pub fn parse_and_validate_config(raw_json: &str) -> Result<Config, String> {
-    let config: Config = serde_json::from_str(raw_json).map_err(|err| {
+    let clean_json = raw_json.trim_start_matches('\u{feff}').trim();
+    let config: Config = serde_json::from_str(clean_json).map_err(|err| {
         format!(
             "Format JSON di config.json tidak valid / malformed: {}",
             err
@@ -187,7 +226,13 @@ pub fn update_config_font_size(app_data_dir: &Path, size: u32) -> Result<Config,
                 err
             )
         })?;
-        serde_json::from_str::<Config>(&raw).unwrap_or_default()
+        let clean = raw.trim_start_matches('\u{feff}').trim();
+        serde_json::from_str::<Config>(clean).map_err(|err| {
+            format!(
+                "Format JSON di config.json tidak valid / malformed: {}",
+                err
+            )
+        })?
     } else {
         Config::default()
     };
@@ -212,7 +257,13 @@ pub fn update_config_window_bounds(
                 err
             )
         })?;
-        serde_json::from_str::<Config>(&raw).unwrap_or_default()
+        let clean = raw.trim_start_matches('\u{feff}').trim();
+        serde_json::from_str::<Config>(clean).map_err(|err| {
+            format!(
+                "Format JSON di config.json tidak valid / malformed: {}",
+                err
+            )
+        })?
     } else {
         Config::default()
     };
@@ -237,7 +288,13 @@ pub fn update_config_last_opened_notes_path(
                 err
             )
         })?;
-        serde_json::from_str::<Config>(&raw).unwrap_or_default()
+        let clean = raw.trim_start_matches('\u{feff}').trim();
+        serde_json::from_str::<Config>(clean).map_err(|err| {
+            format!(
+                "Format JSON di config.json tidak valid / malformed: {}",
+                err
+            )
+        })?
     } else {
         Config::default()
     };
@@ -350,6 +407,43 @@ mod tests {
         );
         assert_eq!(config.hotkeys.push_to_talk, "F8");
         assert_eq!(config.hotkeys.toggle_visibility, "F9");
+    }
+
+    #[test]
+    fn test_config_missing_hotkeys_and_optional_fields_uses_defaults() {
+        let legacy_json = r#"{
+            "openrouterApiKeys": ["sk-or-v1-abc123test"],
+            "groqApiKeys": ["gsk_test456key"]
+        }"#;
+
+        let result = parse_and_validate_config(legacy_json);
+        assert!(
+            result.is_ok(),
+            "Config legacy tanpa hotkeys harus tetap berhasil diparse"
+        );
+
+        let config = result.unwrap();
+        assert_eq!(config.hotkeys.push_to_talk, "F8");
+        assert_eq!(config.hotkeys.toggle_visibility, "F9");
+        assert_eq!(config.font_size, DEFAULT_FONT_SIZE);
+        assert_eq!(config.window_bounds.width, 550);
+        assert_eq!(config.window_bounds.height, 350);
+        assert_eq!(config.last_opened_notes_path, None);
+    }
+
+    #[test]
+    fn test_appdata_config_if_exists() {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            let path = Path::new(&appdata).join("com.dnist.tauri-app");
+            if path.join("config.json").exists() {
+                let res = load_config(&path);
+                assert!(
+                    res.is_ok(),
+                    "Config di AppData harus berhasil diload: {:?}",
+                    res.err()
+                );
+            }
+        }
     }
 
     #[test]
