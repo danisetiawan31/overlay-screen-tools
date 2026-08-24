@@ -4,6 +4,7 @@ import { commands } from "./bindings";
 import { FontSizeControl } from "./components/FontSizeControl";
 import { TabNav, TabType } from "./components/TabNav";
 import { NotesPanel } from "./components/NotesPanel";
+import { QaPanel } from "./components/QaPanel";
 
 export const App: React.FC = () => {
   const [fontSize, setFontSize] = useState<number | null>(null);
@@ -149,27 +150,22 @@ export const App: React.FC = () => {
             className="flex-1 p-4 overflow-hidden min-h-0"
             style={{ fontSize: fontSize ? `${fontSize}px` : undefined }}
           >
-            {activeTab === "notes" && (
-              <div
-                role="tabpanel"
-                id="panel-notes"
-                aria-labelledby="tab-notes"
-                className="h-full"
-              >
-                <NotesPanel />
-              </div>
-            )}
-            {activeTab === "qa" && (
-              <div
-                role="tabpanel"
-                id="panel-qa"
-                aria-labelledby="tab-qa"
-                className="h-full flex flex-col items-center justify-center rounded-lg border border-zinc-800/60 bg-zinc-900/30 p-4 text-center"
-              >
-                <h2 className="text-zinc-300 font-semibold text-sm mb-1">Live Q&A Mode</h2>
-                <p className="text-zinc-500 text-xs">Live Q&A mode — segera hadir</p>
-              </div>
-            )}
+            <div
+              role="tabpanel"
+              id="panel-notes"
+              aria-labelledby="tab-notes"
+              className={`h-full ${activeTab === "notes" ? "" : "hidden"}`}
+            >
+              <NotesPanel />
+            </div>
+            <div
+              role="tabpanel"
+              id="panel-qa"
+              aria-labelledby="tab-qa"
+              className={`h-full ${activeTab === "qa" ? "" : "hidden"}`}
+            >
+              <QaPanel qaAvailable={qaAvailable === true} />
+            </div>
           </main>
         </>
       )}

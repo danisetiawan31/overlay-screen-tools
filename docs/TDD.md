@@ -64,14 +64,19 @@
 ## 5. Audio Capture & STT
 
 - Capture: `getUserMedia` + `MediaRecorder` di webview. Output `audio/webm;codecs=opus`, tidak perlu dikonversi — Groq API menerima `webm` secara native.
-- **Permission mic**: dikonfigurasi lewat sistem capability/permission Tauri v2 (`src-tauri/capabilities/*.json`) — perlu dicek eksplisit saat implementasi apakah `getUserMedia` sebagai Web API standar butuh capability tambahan atau cukup permission prompt bawaan webview.
+- **Permission mic**: dikonfigurasi lewat sistem capability/permission Tauri v2 (`src-tauri/capabilities/*.json`) — Web API standar `getUserMedia` di WebView2 Windows berjalan native tanpa plugin tambahan.
 - HTTP call ke Groq (`whisper-large-v3-turbo`) dan OpenRouter: crate `reqwest` di Rust core (termasuk `multipart` untuk upload audio blob), dipanggil dari `#[tauri::command]`.
+- **Mekanisme Fallback API Key (Resilience)**: berlaku untuk Groq STT maupun OpenRouter AI, pola generik yang sama untuk keduanya.
+  - Key disimpan sebagai **ordered list** (`groqApiKeys`/`openrouterApiKeys`, index 0 = primary) — 1 loop generik "coba tiap key sampai berhasil", dipakai ulang untuk kedua provider, bukan field primary+fallback terpisah.
+  - **Lanjut ke key berikutnya** kalau error transient/key-related: network error (timeout/connection failure), atau HTTP 401/403/429/5xx.
+  - **STOP, jangan lanjut ke key lain** kalau error non-transient: HTTP 400/404/422 — jenis error ini gagal identik di key manapun, retry cuma buang waktu.
+  - Semua key habis dicoba tetap gagal → emit `qa:error` (`stage: "stt"` atau `"ai"`) dengan message dari percobaan terakhir.
 - Alur: F8 dilepas → webview stop `MediaRecorder` → blob dikirim lewat `invoke` → core kirim ke Groq → hasil di-`emit` balik ke webview (`transcript:result`, non-blocking) → di tick yang sama, core lanjut kirim ke OpenRouter pakai teks transkrip sebagai input.
 - **Catatan soal "paralel"**: transkrip → AI itu sekuensial by nature (AI butuh teks transkrip sebagai input). "Non-blocking/paralel" artinya UI tidak menunggu AI selesai untuk menampilkan transkrip — bukan dua request berjalan bersamaan dari nol.
 - **F8 ditekan lagi sebelum request sebelumnya selesai**: request lama di-discard, request baru menang. Tidak di-queue.
 - **State Q&A di frontend adalah satu object yang di-overwrite**, bukan array yang di-push (`{ question, answer, status }`) — mencegah implementasi default yang nge-append jadi history list.
 - **Minimum hold duration ~300–500ms** untuk F8 sebelum audio benar-benar dikirim — mencegah tekan-tanpa-sengaja yang tetap trigger request (biaya + noise).
-- **Cek ketersediaan mic** (permission/device) saat app start atau percobaan F8 pertama, tampilkan warning jelas kalau gagal.
+- **Keamanan Endpoint Override E2E**: `is_e2e_test_mode()` dan endpoint override (`GROQ_API_URL`/`OPENROUTER_API_URL`) WAJIB di-gate ganda `#[cfg(debug_assertions)]` (compile-time) DAN runtime check. Di build release (`not(debug_assertions)`), fungsi ini ter-compile out menjadi hardcoded URL resmi dan return `false` tanpa jejak kode pembaca env var sama sekali — mencegah eksfiltrasi Authorization header/API key asli ke server pihak ketiga lewat manipulasi environment variable.
 - Error di titik manapun (STT gagal, OpenRouter gagal) → event `qa:error`, tampil jelas — bukan gagal senyap.
 
 ## 6. Notes/Teleprompter Mode
@@ -88,8 +93,8 @@ Lokasi: `config.json` lokal di direktori data aplikasi (`app_data_dir()`).
 Skema (bukan ERD relasional — cuma flat config, tidak ada database):
 ```json
 {
-  "openrouterApiKey": "string",
-  "groqApiKey": "string",
+  "openrouterApiKeys": ["string"],
+  "groqApiKeys": ["string"],
   "windowBounds": { "x": 0, "y": 0, "width": 400, "height": 600 },
   "fontSize": 14,
   "lastOpenedNotesPath": "string | null",
@@ -97,8 +102,9 @@ Skema (bukan ERD relasional — cuma flat config, tidak ada database):
 }
 ```
 - API key tersimpan plaintext — risiko yang diterima secara sadar untuk tool single-user di laptop pribadi.
+- `groqApiKeys`/`openrouterApiKeys` wajib berisi minimal 1 key (index 0 = primary, dicoba pertama). Array kosong/tidak ada saat startup → tampilkan error jelas via tray notification, bukan gagal senyap.
 - **Baca config wajib lewat `Result`**: kalau `serde_json::from_str` gagal parse (malformed JSON), match `Err` dan tampilkan error jelas lewat tray notification — jangan biarkan app gagal start tanpa pesan apapun.
-- **First-run**: tidak ada UI setup wizard — user isi `openrouterApiKey`/`groqApiKey` dengan edit `config.json` manual. Kalau file belum ada atau key kosong saat app start, tampilkan pesan error jelas (tray notification), bukan gagal senyap.
+- **First-run**: tidak ada UI setup wizard — user isi `openrouterApiKeys`/`groqApiKeys` dengan edit `config.json` manual. Kalau file belum ada atau array key kosong saat app start, tampilkan pesan error jelas (tray notification), bukan gagal senyap.
 
 ## 8. Window Properties & Font Size
 

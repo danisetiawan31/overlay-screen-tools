@@ -20,6 +20,27 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 const WDA_EXCLUDEFROMCAPTURE: u32 = 0x00000011;
 
+/// Identifier unik untuk system tray icon utama aplikasi.
+pub const MAIN_TRAY_ID: &str = "main-tray";
+/// Tooltip default untuk tray icon saat status idle / normal.
+pub const DEFAULT_TRAY_TOOLTIP: &str = "Screen Overlay Tool";
+/// Tooltip tray icon saat hotkey push-to-talk F8 sedang merekam audio (PRD §3.3).
+pub const RECORDING_TRAY_TOOLTIP: &str = "Screen Overlay Tool — Recording...";
+
+/// Memperbarui tooltip tray icon untuk menandakan status recording audio secara visual (PRD §3.3).
+pub fn update_tray_recording_state(app: &tauri::AppHandle, is_recording: bool) {
+    if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
+        let tooltip = if is_recording {
+            RECORDING_TRAY_TOOLTIP
+        } else {
+            DEFAULT_TRAY_TOOLTIP
+        };
+        if let Err(err) = tray.set_tooltip(Some(tooltip)) {
+            eprintln!("[TRAY ERROR] Gagal mengupdate tooltip tray: {}", err);
+        }
+    }
+}
+
 /// Ambang batas durasi tahan minimum F8 (ms) untuk membedakan antara klik tak sengaja dan push-to-talk yang valid.
 pub const PUSH_TO_TALK_MIN_HOLD_MS: u64 = 400;
 
@@ -41,6 +62,28 @@ pub struct NotesUpdatePayload {
 #[serde(rename_all = "camelCase")]
 #[tauri_specta(event_name = "notes:error")]
 pub struct NotesErrorPayload {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "transcript:result")]
+pub struct TranscriptResultPayload {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "answer:result")]
+pub struct AnswerResultPayload {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "qa:error")]
+pub struct QaErrorPayload {
+    pub stage: String,
     pub message: String,
 }
 
@@ -77,6 +120,7 @@ pub struct OverlayState {
     pub notes_watcher: Option<notify::RecommendedWatcher>,
     pub last_notes_content: Option<String>,
     pub last_notes_error: Option<String>,
+    pub qa_generation: u64,
 }
 
 impl OverlayState {
@@ -100,6 +144,7 @@ impl Default for OverlayState {
             notes_watcher: None,
             last_notes_content: None,
             last_notes_error: None,
+            qa_generation: 0,
         }
     }
 }
@@ -111,9 +156,69 @@ pub fn parse_e2e_test_mode_from_str(val: Option<&str>) -> bool {
 }
 
 /// Memeriksa apakah aplikasi dijalankan dalam mode pengujian E2E (`E2E_TEST_MODE=true`).
+/// WAJIB di-gate #[cfg(debug_assertions)]: pada release build selalu return false hardcoded.
+#[cfg(debug_assertions)]
 pub fn is_e2e_test_mode() -> bool {
     let env_val = std::env::var("E2E_TEST_MODE").ok();
-    parse_e2e_test_mode_from_str(env_val.as_deref())
+    if parse_e2e_test_mode_from_str(env_val.as_deref()) {
+        return true;
+    }
+    std::env::args().any(|arg| arg == "--e2e-test-mode" || arg == "--e2e")
+}
+
+#[cfg(not(debug_assertions))]
+pub fn is_e2e_test_mode() -> bool {
+    false
+}
+
+/// Mendapatkan endpoint Groq Whisper STT.
+/// Pada debug_assertions & E2E_TEST_MODE=true: membaca GROQ_API_URL atau CLI arg untuk mock HTTP server.
+/// Pada release build: selalu mengembalikan URL resmi production hardcoded tanpa jejak env var.
+#[cfg(debug_assertions)]
+pub fn get_groq_endpoint() -> String {
+    if is_e2e_test_mode() {
+        if let Ok(val) = std::env::var("GROQ_API_URL") {
+            return val;
+        }
+        for arg in std::env::args() {
+            if let Some(val) = arg.strip_prefix("--groq-url=") {
+                return val.to_string();
+            }
+        }
+        "http://127.0.0.1:4545/groq".to_string()
+    } else {
+        "https://api.groq.com/openai/v1/audio/transcriptions".to_string()
+    }
+}
+
+#[cfg(not(debug_assertions))]
+pub fn get_groq_endpoint() -> String {
+    "https://api.groq.com/openai/v1/audio/transcriptions".to_string()
+}
+
+/// Mendapatkan endpoint OpenRouter Chat Completion.
+/// Pada debug_assertions & E2E_TEST_MODE=true: membaca OPENROUTER_API_URL atau CLI arg untuk mock HTTP server.
+/// Pada release build: selalu mengembalikan URL resmi production hardcoded tanpa jejak env var.
+#[cfg(debug_assertions)]
+pub fn get_openrouter_endpoint() -> String {
+    if is_e2e_test_mode() {
+        if let Ok(val) = std::env::var("OPENROUTER_API_URL") {
+            return val;
+        }
+        for arg in std::env::args() {
+            if let Some(val) = arg.strip_prefix("--openrouter-url=") {
+                return val.to_string();
+            }
+        }
+        "http://127.0.0.1:4545/openrouter".to_string()
+    } else {
+        "https://openrouter.ai/api/v1/chat/completions".to_string()
+    }
+}
+
+#[cfg(not(debug_assertions))]
+pub fn get_openrouter_endpoint() -> String {
+    "https://openrouter.ai/api/v1/chat/completions".to_string()
 }
 
 /// Memeriksa apakah durasi hold berada di bawah ambang batas minimum push-to-talk.
@@ -123,16 +228,18 @@ pub fn is_hold_duration_below_threshold(duration: std::time::Duration) -> bool {
 
 /// Logika keputusan murni saat tombol F8 ditekan (Pressed).
 ///
-/// Mengembalikan `true` jika event start harus di-emit (tekanan pertama).
+/// Mengembalikan `true` jika event start harus di-emit (tekanan pertama), serta menaikkan nomor `qa_generation`.
 /// Mengembalikan `false` jika sedang recording (mengabaikan repeated Pressed akibat key-repeat OS).
 pub fn handle_f8_press(
     is_recording: &mut bool,
     start_instant: &mut Option<std::time::Instant>,
+    qa_generation: &mut u64,
     now: std::time::Instant,
 ) -> bool {
     if !*is_recording {
         *is_recording = true;
         *start_instant = Some(now);
+        *qa_generation = qa_generation.wrapping_add(1);
         true
     } else {
         false
@@ -158,6 +265,199 @@ pub fn handle_f8_release(
     }
 }
 
+/// Memeriksa apakah nomor generasi request Q&A masih merupakan generasi terbaru.
+pub fn is_qa_generation_current(app: &tauri::AppHandle, expected_generation: u64) -> bool {
+    let state = app.state::<Mutex<OverlayState>>();
+    let state_guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    state_guard.qa_generation == expected_generation
+}
+
+/// Klasifikasi aksi penanganan error HTTP untuk fallback API key (TDD §5).
+#[derive(Debug, PartialEq)]
+pub enum RetryAction {
+    RetryNextKey(String),
+    StopNonTransient(String),
+}
+
+/// Mengklasifikasi status error HTTP:
+/// - 400 / 404 / 422: Non-transient (Stop / fail-fast)
+/// - 401 / 403 / 429 / 5xx / Network timeout: Transient / key-related (Retry next key)
+pub fn classify_http_error(status: Option<reqwest::StatusCode>, err_text: &str) -> RetryAction {
+    match status {
+        Some(s) if s.as_u16() == 400 || s.as_u16() == 404 || s.as_u16() == 422 => {
+            RetryAction::StopNonTransient(format!("HTTP {}: {}", s, err_text))
+        }
+        Some(s) => RetryAction::RetryNextKey(format!("HTTP {}: {}", s, err_text)),
+        None => RetryAction::RetryNextKey(err_text.to_string()),
+    }
+}
+
+/// Eksekusi generic loop fallback API key untuk Groq & OpenRouter (TDD §5).
+pub async fn execute_fallback_keys<T, F, Fut>(
+    keys: &[String],
+    mut operation: F,
+) -> Result<T, String>
+where
+    F: FnMut(&str) -> Fut,
+    Fut: std::future::Future<Output = Result<T, (Option<reqwest::StatusCode>, String)>>,
+{
+    let valid_keys: Vec<&str> = keys
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if valid_keys.is_empty() {
+        return Err("Tidak ada API key yang valid di config.json".to_string());
+    }
+
+    let mut last_error = String::from("Semua API key gagal");
+    for key in valid_keys {
+        match operation(key).await {
+            Ok(val) => return Ok(val),
+            Err((status, msg)) => match classify_http_error(status, &msg) {
+                RetryAction::StopNonTransient(err) => return Err(err),
+                RetryAction::RetryNextKey(err) => {
+                    last_error = err;
+                }
+            },
+        }
+    }
+
+    Err(last_error)
+}
+
+/// Helper untuk memanggil Groq Whisper STT API via multipart form-data.
+pub async fn call_groq_stt(
+    client: &reqwest::Client,
+    key: &str,
+    audio_bytes: &[u8],
+) -> Result<String, (Option<reqwest::StatusCode>, String)> {
+    let part = reqwest::multipart::Part::bytes(audio_bytes.to_vec())
+        .file_name("audio.webm")
+        .mime_str("audio/webm")
+        .map_err(|e| (None, format!("Gagal membuat form audio: {}", e)))?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("model", "whisper-large-v3-turbo");
+
+    let response = client
+        .post(get_groq_endpoint())
+        .bearer_auth(key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| (e.status(), format!("Network error Groq: {}", e)))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let err_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Gagal membaca body error".to_string());
+        return Err((Some(status), err_body));
+    }
+
+    #[derive(Deserialize)]
+    struct GroqResponse {
+        text: String,
+    }
+
+    let parsed = response
+        .json::<GroqResponse>()
+        .await
+        .map_err(|e| (Some(status), format!("Gagal parse JSON Groq: {}", e)))?;
+
+    Ok(parsed.text)
+}
+
+/// Helper untuk memanggil OpenRouter Chat Completion API.
+pub async fn call_openrouter_ai(
+    client: &reqwest::Client,
+    key: &str,
+    transcript: &str,
+) -> Result<String, (Option<reqwest::StatusCode>, String)> {
+    #[derive(Serialize)]
+    struct Message {
+        role: String,
+        content: String,
+    }
+
+    #[derive(Serialize)]
+    struct OpenRouterRequest {
+        model: String,
+        messages: Vec<Message>,
+    }
+
+    let request_payload = OpenRouterRequest {
+        model: "meta-llama/llama-3.3-70b-instruct".to_string(),
+        messages: vec![
+            Message {
+                role: "system".to_string(),
+                content: "You are a live assistant providing concise, high-density talking points to help a speaker answer live audience questions clearly and directly. Keep answers brief (2-4 bullet points or short paragraphs), accurate, and immediately readable.".to_string(),
+            },
+            Message {
+                role: "user".to_string(),
+                content: transcript.to_string(),
+            },
+        ],
+    };
+
+    let response = client
+        .post(get_openrouter_endpoint())
+        .bearer_auth(key)
+        .header(
+            "HTTP-Referer",
+            "https://github.com/danisetiawan31/overlay-screen-tools",
+        )
+        .header("X-Title", "Screen Overlay Tool")
+        .json(&request_payload)
+        .send()
+        .await
+        .map_err(|e| (e.status(), format!("Network error OpenRouter: {}", e)))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let err_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Gagal membaca body error".to_string());
+        return Err((Some(status), err_body));
+    }
+
+    #[derive(Deserialize)]
+    struct MessageContent {
+        content: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Choice {
+        message: MessageContent,
+    }
+
+    #[derive(Deserialize)]
+    struct OpenRouterResponse {
+        choices: Vec<Choice>,
+    }
+
+    let parsed = response
+        .json::<OpenRouterResponse>()
+        .await
+        .map_err(|e| (Some(status), format!("Gagal parse JSON OpenRouter: {}", e)))?;
+
+    if let Some(choice) = parsed.choices.into_iter().next() {
+        Ok(choice.message.content)
+    } else {
+        Err((
+            Some(status),
+            "OpenRouter mengembalikan choices kosong".to_string(),
+        ))
+    }
+}
+
 /// Handler terpusat saat F8 ditekan (dipakai bersama oleh shortcut fisik dan simulasi E2E).
 pub fn handle_f8_pressed_event(app: &tauri::AppHandle) {
     let state = app.state::<Mutex<OverlayState>>();
@@ -170,12 +470,14 @@ pub fn handle_f8_pressed_event(app: &tauri::AppHandle) {
         handle_f8_press(
             &mut guard.is_recording,
             &mut guard.recording_start_instant,
+            &mut guard.qa_generation,
             std::time::Instant::now(),
         )
     };
 
     if should_emit {
         println!("[HOTKEY] F8 Pressed: recording started");
+        update_tray_recording_state(app, true);
         let _ = app.emit("qa:recording-started", ());
     }
 }
@@ -201,6 +503,7 @@ pub fn handle_f8_released_event(app: &tauri::AppHandle) {
             "[HOTKEY] F8 Released: recording ended (belowThreshold={})",
             below_threshold
         );
+        update_tray_recording_state(app, false);
         let _ = app.emit(
             "qa:recording-ended",
             RecordingEndedPayload { below_threshold },
@@ -535,13 +838,17 @@ pub fn run() {
             commands::get_app_state,
             commands::get_notes_state,
             commands::pick_notes_file,
+            commands::send_audio_blob,
             commands::test_trigger_hotkey
         ])
         .events(collect_events![
             ConfigErrorPayload,
             RecordingEndedPayload,
             NotesUpdatePayload,
-            NotesErrorPayload
+            NotesErrorPayload,
+            TranscriptResultPayload,
+            AnswerResultPayload,
+            QaErrorPayload
         ]);
 
     #[cfg(not(debug_assertions))]
@@ -550,13 +857,17 @@ pub fn run() {
             commands::update_font_size,
             commands::get_app_state,
             commands::get_notes_state,
-            commands::pick_notes_file
+            commands::pick_notes_file,
+            commands::send_audio_blob
         ])
         .events(collect_events![
             ConfigErrorPayload,
             RecordingEndedPayload,
             NotesUpdatePayload,
-            NotesErrorPayload
+            NotesErrorPayload,
+            TranscriptResultPayload,
+            AnswerResultPayload,
+            QaErrorPayload
         ]);
 
     #[cfg(debug_assertions)]
@@ -636,26 +947,69 @@ pub fn run() {
                     Some(loaded_cfg)
                 }
                 Err(err_msg) => {
-                    eprintln!("[CONFIG ERROR] {}", err_msg);
-                    let _ = app.emit(
-                        "config:error",
-                        ConfigErrorPayload {
-                            message: err_msg.clone(),
-                        },
-                    );
-                    if let Err(notify_err) = app
-                        .notification()
-                        .builder()
-                        .title("Screen Overlay Tool")
-                        .body(&err_msg)
-                        .show()
-                    {
-                        eprintln!(
-                            "[NOTIFICATION ERROR] Gagal menampilkan notifikasi: {}",
-                            notify_err
+                    #[cfg(debug_assertions)]
+                    if is_e2e_test_mode() {
+                        println!("[E2E] Config tidak ditemukan, menggunakan mock config untuk E2E test");
+                        let mock_cfg = config::Config {
+                            openrouter_api_keys: vec!["mock-openrouter-key".to_string()],
+                            groq_api_keys: vec!["mock-groq-key".to_string()],
+                            window_bounds: config::WindowBounds::default(),
+                            font_size: config::DEFAULT_FONT_SIZE,
+                            last_opened_notes_path: None,
+                            hotkeys: config::HotkeysConfig::default(),
+                        };
+                        let state = app.state::<Mutex<OverlayState>>();
+                        let mut state_guard = match state.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        state_guard.config = Some(mock_cfg.clone());
+                        Some(mock_cfg)
+                    } else {
+                        eprintln!("[CONFIG ERROR] {}", err_msg);
+                        let _ = app.emit(
+                            "config:error",
+                            ConfigErrorPayload {
+                                message: err_msg.clone(),
+                            },
                         );
+                        if let Err(notify_err) = app
+                            .notification()
+                            .builder()
+                            .title("Screen Overlay Tool")
+                            .body(&err_msg)
+                            .show()
+                        {
+                            eprintln!(
+                                "[NOTIFICATION ERROR] Gagal menampilkan notifikasi: {}",
+                                notify_err
+                            );
+                        }
+                        None
                     }
-                    None
+                    #[cfg(not(debug_assertions))]
+                    {
+                        eprintln!("[CONFIG ERROR] {}", err_msg);
+                        let _ = app.emit(
+                            "config:error",
+                            ConfigErrorPayload {
+                                message: err_msg.clone(),
+                            },
+                        );
+                        if let Err(notify_err) = app
+                            .notification()
+                            .builder()
+                            .title("Screen Overlay Tool")
+                            .body(&err_msg)
+                            .show()
+                        {
+                            eprintln!(
+                                "[NOTIFICATION ERROR] Gagal menampilkan notifikasi: {}",
+                                notify_err
+                            );
+                        }
+                        None
+                    }
                 }
             };
 
@@ -893,7 +1247,8 @@ pub fn run() {
                 .items(&[&toggle_menu_item, &quit_menu_item])
                 .build()?;
 
-            let tray_builder = TrayIconBuilder::new()
+            let tray_builder = TrayIconBuilder::with_id(MAIN_TRAY_ID)
+                .tooltip(DEFAULT_TRAY_TOOLTIP)
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
@@ -1119,12 +1474,19 @@ mod tests {
     fn test_handle_f8_press_first_time_returns_true_and_sets_recording() {
         let mut is_recording = false;
         let mut start_instant = None;
+        let mut qa_generation = 0;
         let now = std::time::Instant::now();
 
-        let should_emit = handle_f8_press(&mut is_recording, &mut start_instant, now);
+        let should_emit = handle_f8_press(
+            &mut is_recording,
+            &mut start_instant,
+            &mut qa_generation,
+            now,
+        );
         assert!(should_emit);
         assert!(is_recording);
         assert_eq!(start_instant, Some(now));
+        assert_eq!(qa_generation, 1);
     }
 
     #[test]
@@ -1132,13 +1494,20 @@ mod tests {
         let mut is_recording = true;
         let t0 = std::time::Instant::now();
         let mut start_instant = Some(t0);
+        let mut qa_generation = 1;
         let t1 = t0 + std::time::Duration::from_millis(100);
 
         // Key-repeat dari OS saat tombol masih ditahan
-        let should_emit = handle_f8_press(&mut is_recording, &mut start_instant, t1);
+        let should_emit = handle_f8_press(
+            &mut is_recording,
+            &mut start_instant,
+            &mut qa_generation,
+            t1,
+        );
         assert!(!should_emit);
         assert!(is_recording);
         assert_eq!(start_instant, Some(t0)); // Timestamp awal tidak tertimpa
+        assert_eq!(qa_generation, 1); // Generation tidak berubah saat repeated
     }
 
     #[test]
@@ -1340,5 +1709,190 @@ mod tests {
         state.last_notes_content = None;
         assert_eq!(state.last_notes_content, None);
         assert_eq!(state.last_notes_error, Some("File not found".to_string()));
+    }
+
+    #[test]
+    fn test_tray_recording_tooltip_constants() {
+        assert_eq!(MAIN_TRAY_ID, "main-tray");
+        assert_eq!(DEFAULT_TRAY_TOOLTIP, "Screen Overlay Tool");
+        assert_eq!(RECORDING_TRAY_TOOLTIP, "Screen Overlay Tool — Recording...");
+    }
+
+    #[test]
+    fn test_classify_http_error_matrix() {
+        use reqwest::StatusCode;
+
+        // Non-transient errors (Stop / fail-fast)
+        assert_eq!(
+            classify_http_error(Some(StatusCode::BAD_REQUEST), "bad request"),
+            RetryAction::StopNonTransient("HTTP 400 Bad Request: bad request".to_string())
+        );
+        assert_eq!(
+            classify_http_error(Some(StatusCode::NOT_FOUND), "not found"),
+            RetryAction::StopNonTransient("HTTP 404 Not Found: not found".to_string())
+        );
+        assert_eq!(
+            classify_http_error(Some(StatusCode::UNPROCESSABLE_ENTITY), "unprocessable"),
+            RetryAction::StopNonTransient(
+                "HTTP 422 Unprocessable Entity: unprocessable".to_string()
+            )
+        );
+
+        // Transient errors (Retry next key)
+        assert_eq!(
+            classify_http_error(Some(StatusCode::UNAUTHORIZED), "invalid key"),
+            RetryAction::RetryNextKey("HTTP 401 Unauthorized: invalid key".to_string())
+        );
+        assert_eq!(
+            classify_http_error(Some(StatusCode::FORBIDDEN), "forbidden"),
+            RetryAction::RetryNextKey("HTTP 403 Forbidden: forbidden".to_string())
+        );
+        assert_eq!(
+            classify_http_error(Some(StatusCode::TOO_MANY_REQUESTS), "rate limited"),
+            RetryAction::RetryNextKey("HTTP 429 Too Many Requests: rate limited".to_string())
+        );
+        assert_eq!(
+            classify_http_error(Some(StatusCode::INTERNAL_SERVER_ERROR), "server error"),
+            RetryAction::RetryNextKey("HTTP 500 Internal Server Error: server error".to_string())
+        );
+        assert_eq!(
+            classify_http_error(None, "connection timeout"),
+            RetryAction::RetryNextKey("connection timeout".to_string())
+        );
+    }
+
+    #[test]
+    fn test_execute_fallback_keys_first_success() {
+        tauri::async_runtime::block_on(async {
+            let keys = vec!["key1".to_string(), "key2".to_string()];
+            let mut call_count = 0;
+
+            let result = execute_fallback_keys(&keys, |_key| {
+                call_count += 1;
+                async move {
+                    Ok::<String, (Option<reqwest::StatusCode>, String)>(
+                        "success_response".to_string(),
+                    )
+                }
+            })
+            .await;
+
+            assert_eq!(result, Ok("success_response".to_string()));
+            assert_eq!(call_count, 1);
+        });
+    }
+
+    #[test]
+    fn test_execute_fallback_keys_transient_retries_and_succeeds_on_second_key() {
+        tauri::async_runtime::block_on(async {
+            let keys = vec!["key_429".to_string(), "key_valid".to_string()];
+            let mut tried_keys = Vec::new();
+
+            let result = execute_fallback_keys(&keys, |key| {
+                tried_keys.push(key.to_string());
+                let k = key.to_string();
+                async move {
+                    if k == "key_429" {
+                        Err((
+                            Some(reqwest::StatusCode::TOO_MANY_REQUESTS),
+                            "rate limited".to_string(),
+                        ))
+                    } else {
+                        Ok("second_key_success".to_string())
+                    }
+                }
+            })
+            .await;
+
+            assert_eq!(result, Ok("second_key_success".to_string()));
+            assert_eq!(tried_keys, vec!["key_429", "key_valid"]);
+        });
+    }
+
+    #[test]
+    fn test_execute_fallback_keys_non_transient_stops_immediately() {
+        tauri::async_runtime::block_on(async {
+            let keys = vec!["key_400".to_string(), "key_never_called".to_string()];
+            let mut tried_keys = Vec::new();
+
+            let result = execute_fallback_keys(&keys, |key| {
+                tried_keys.push(key.to_string());
+                let k = key.to_string();
+                async move {
+                    if k == "key_400" {
+                        Err((
+                            Some(reqwest::StatusCode::BAD_REQUEST),
+                            "bad prompt".to_string(),
+                        ))
+                    } else {
+                        Ok("unexpected".to_string())
+                    }
+                }
+            })
+            .await;
+
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("400 Bad Request"));
+            assert_eq!(tried_keys, vec!["key_400"]);
+        });
+    }
+
+    #[test]
+    fn test_execute_fallback_keys_all_transient_fails_with_last_error() {
+        tauri::async_runtime::block_on(async {
+            let keys = vec!["key_429".to_string(), "key_401".to_string()];
+
+            let result: Result<String, String> = execute_fallback_keys(&keys, |key| {
+                let k = key.to_string();
+                async move {
+                    if k == "key_429" {
+                        Err((
+                            Some(reqwest::StatusCode::TOO_MANY_REQUESTS),
+                            "rate limited".to_string(),
+                        ))
+                    } else {
+                        Err((
+                            Some(reqwest::StatusCode::UNAUTHORIZED),
+                            "invalid token".to_string(),
+                        ))
+                    }
+                }
+            })
+            .await;
+
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(err.contains("401 Unauthorized"));
+        });
+    }
+
+    #[test]
+    fn test_endpoint_getters_default_and_override() {
+        // 1. Saat E2E_TEST_MODE tidak aktif -> default production URL
+        std::env::remove_var("E2E_TEST_MODE");
+        std::env::set_var("GROQ_API_URL", "http://127.0.0.1:9999/groq");
+        std::env::set_var("OPENROUTER_API_URL", "http://127.0.0.1:9999/openrouter");
+
+        assert_eq!(
+            get_groq_endpoint(),
+            "https://api.groq.com/openai/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            get_openrouter_endpoint(),
+            "https://openrouter.ai/api/v1/chat/completions"
+        );
+
+        // 2. Saat E2E_TEST_MODE=true -> return overridden URL
+        std::env::set_var("E2E_TEST_MODE", "true");
+        assert_eq!(get_groq_endpoint(), "http://127.0.0.1:9999/groq");
+        assert_eq!(
+            get_openrouter_endpoint(),
+            "http://127.0.0.1:9999/openrouter"
+        );
+
+        // Cleanup env vars
+        std::env::remove_var("E2E_TEST_MODE");
+        std::env::remove_var("GROQ_API_URL");
+        std::env::remove_var("OPENROUTER_API_URL");
     }
 }

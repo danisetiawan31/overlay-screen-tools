@@ -11,18 +11,26 @@ export const commands = {
 	pickNotesFile: () => typedError<{
 	path: string,
 } | null, string>(__TAURI_INVOKE("pick_notes_file")),
+	sendAudioBlob: (args: SendAudioBlobArgs) => typedError<null, string>(__TAURI_INVOKE("send_audio_blob", { args })),
 	testTriggerHotkey: (args: TestTriggerHotkeyArgs) => typedError<null, string>(__TAURI_INVOKE("test_trigger_hotkey", { args })),
 };
 
 /** Events */
 export const events = {
+	answerResult: makeEvent<AnswerResultPayload>("answer:result"),
 	configError: makeEvent<ConfigErrorPayload>("config:error"),
 	notesError: makeEvent<NotesErrorPayload>("notes:error"),
 	notesUpdate: makeEvent<NotesUpdatePayload>("notes:update"),
+	qaError: makeEvent<QaErrorPayload>("qa:error"),
 	qaRecordingEnded: makeEvent<RecordingEndedPayload>("qa:recording-ended"),
+	transcriptResult: makeEvent<TranscriptResultPayload>("transcript:result"),
 };
 
 /* Types */
+export type AnswerResultPayload = {
+	text: string,
+};
+
 export type AppState = {
 	fontSize: number,
 	qaAvailable: boolean,
@@ -49,13 +57,26 @@ export type PickNotesFileResponse = {
 	path: string,
 };
 
+export type QaErrorPayload = {
+	stage: string,
+	message: string,
+};
+
 export type RecordingEndedPayload = {
 	belowThreshold: boolean,
+};
+
+export type SendAudioBlobArgs = {
+	bytes: number[],
 };
 
 export type TestTriggerHotkeyArgs = {
 	hotkey: string,
 	state: string,
+};
+
+export type TranscriptResultPayload = {
+	text: string,
 };
 
 /* Tauri Specta runtime */

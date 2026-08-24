@@ -35,7 +35,7 @@ Ini adalah tool single-user, personal, untuk satu orang di satu laptop Windows 1
 5. Audio yang direkam ditranskripsi lewat speech-to-text; teks hasil transkripsi langsung tampil di overlay (non-blocking) sementara request ke AI dikirim secara paralel
 6. AI (via OpenRouter) mengembalikan jawaban, yang ditampilkan di overlay
 7. Hanya pasangan pertanyaan/jawaban terbaru yang ditampilkan — belum ada scrollable history di versi ini
-8. Kalau STT atau request AI gagal, overlay menampilkan pesan error yang jelas dan ringkas, bukan gagal secara senyap
+8. Kalau STT atau request AI gagal setelah seluruh API key (primary & fallback) dicoba, overlay menampilkan pesan error yang jelas dan ringkas, bukan gagal secara senyap
 
 Ada global hotkey terpisah untuk toggle visibility seluruh overlay (show/hide), independen dari hotkey Q&A. Overlay bersifat always-on-top secara default dan bisa di-drag untuk reposisi.
 
@@ -46,7 +46,7 @@ Overlay diakses lewat system tray icon. Klik kanan tray icon menampilkan menu de
 - Overlay window desktop (Windows 11) yang dikecualikan dari screen capture/recording lewat `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`
 - Dua mode tampilan yang bisa di-switch: Notes/Teleprompter dan Live Q&A
 - Notes mode: file picker untuk `.md`, auto-sync berbasis file watcher, rendering Markdown (list, heading, code block dengan syntax highlighting), plus scratchpad quick-edit di dalam aplikasi
-- Q&A mode: global push-to-talk hotkey, transkripsi speech-to-text, request AI via OpenRouter, tampilan non-blocking untuk teks transkripsi, tampilan jawaban AI terbaru saja
+- Q&A mode: global push-to-talk hotkey, transkripsi speech-to-text (Groq), request AI via OpenRouter, fallback API key untuk resilience (detail teknis di TDD §5), tampilan non-blocking untuk teks transkripsi, tampilan jawaban AI terbaru saja
 - Global hotkey terpisah untuk toggle visibility overlay
 - Overlay always-on-top dan bisa di-drag ke posisi manapun di layar
 - Kontrol ukuran font (tombol +/− di dalam overlay) untuk menyesuaikan keterbacaan teks Notes/Q&A

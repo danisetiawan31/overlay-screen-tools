@@ -78,6 +78,16 @@ struct RecordingEndedPayload {
 }
 
 #[derive(serde::Serialize, specta::Type)]
+struct TranscriptResultPayload {
+    text: String,
+}
+
+#[derive(serde::Serialize, specta::Type)]
+struct AnswerResultPayload {
+    text: String,
+}
+
+#[derive(serde::Serialize, specta::Type)]
 struct QaErrorPayload {
     stage: String, // "stt" | "ai"
     message: String,

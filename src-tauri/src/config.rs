@@ -52,8 +52,8 @@ impl Default for HotkeysConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
-    pub openrouter_api_key: String,
-    pub groq_api_key: String,
+    pub openrouter_api_keys: Vec<String>,
+    pub groq_api_keys: Vec<String>,
     pub window_bounds: WindowBounds,
     pub font_size: u32,
     pub last_opened_notes_path: Option<String>,
@@ -63,8 +63,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            openrouter_api_key: String::new(),
-            groq_api_key: String::new(),
+            openrouter_api_keys: Vec::new(),
+            groq_api_keys: Vec::new(),
             window_bounds: WindowBounds::default(),
             font_size: DEFAULT_FONT_SIZE,
             last_opened_notes_path: None,
@@ -89,7 +89,7 @@ pub fn get_config_path(app_data_dir: &Path) -> PathBuf {
 /// Mengembalikan `Err(String)` jika:
 /// - File tidak ditemukan
 /// - File gagal dibaca / format JSON malformed
-/// - `openrouterApiKey` atau `groqApiKey` kosong
+/// - `openrouterApiKeys` atau `groqApiKeys` tidak memiliki minimal 1 key valid
 pub fn load_config(app_data_dir: &Path) -> Result<Config, String> {
     let config_path = get_config_path(app_data_dir);
 
@@ -120,8 +120,14 @@ pub fn parse_and_validate_config(raw_json: &str) -> Result<Config, String> {
         )
     })?;
 
-    if config.openrouter_api_key.trim().is_empty() || config.groq_api_key.trim().is_empty() {
-        return Err("openrouterApiKey atau groqApiKey di config.json masih kosong. Silakan isi kedua API key tersebut.".to_string());
+    let has_valid_openrouter = config
+        .openrouter_api_keys
+        .iter()
+        .any(|k| !k.trim().is_empty());
+    let has_valid_groq = config.groq_api_keys.iter().any(|k| !k.trim().is_empty());
+
+    if !has_valid_openrouter || !has_valid_groq {
+        return Err("openrouterApiKeys atau groqApiKeys di config.json belum memiliki key valid (minimal 1 key tidak kosong). Silakan isi API key tersebut.".to_string());
     }
 
     Ok(config)
@@ -313,8 +319,8 @@ mod tests {
     #[test]
     fn test_valid_config_parsed_correctly() {
         let valid_json = r#"{
-            "openrouterApiKey": "sk-or-v1-abc123test",
-            "groqApiKey": "gsk_test456key",
+            "openrouterApiKeys": ["sk-or-v1-abc123test", "sk-or-v1-fallback456"],
+            "groqApiKeys": ["gsk_test456key", "gsk_fallback789key"],
             "windowBounds": { "x": 120, "y": 80, "width": 600, "height": 400 },
             "fontSize": 16,
             "lastOpenedNotesPath": "C:\\notes\\session.md",
@@ -325,8 +331,14 @@ mod tests {
         assert!(result.is_ok());
 
         let config = result.unwrap();
-        assert_eq!(config.openrouter_api_key, "sk-or-v1-abc123test");
-        assert_eq!(config.groq_api_key, "gsk_test456key");
+        assert_eq!(
+            config.openrouter_api_keys,
+            vec!["sk-or-v1-abc123test", "sk-or-v1-fallback456"]
+        );
+        assert_eq!(
+            config.groq_api_keys,
+            vec!["gsk_test456key", "gsk_fallback789key"]
+        );
         assert_eq!(config.window_bounds.x, 120);
         assert_eq!(config.window_bounds.y, 80);
         assert_eq!(config.window_bounds.width, 600);
@@ -352,8 +364,8 @@ mod tests {
     #[test]
     fn test_malformed_json() {
         let malformed_json = r#"{
-            "openrouterApiKey": "sk-or-123",
-            "groqApiKey": "gsk-456",
+            "openrouterApiKeys": ["sk-or-123"],
+            "groqApiKeys": ["gsk-456"],
             "fontSize": "bukan_angka",
         }"#;
 
@@ -365,10 +377,10 @@ mod tests {
 
     #[test]
     fn test_empty_api_keys() {
-        // Kasus 1: OpenRouter key kosong
+        // Kasus 1: OpenRouter keys array kosong atau hanya whitespace
         let empty_openrouter = r#"{
-            "openrouterApiKey": "   ",
-            "groqApiKey": "gsk_valid_key",
+            "openrouterApiKeys": ["   ", ""],
+            "groqApiKeys": ["gsk_valid_key"],
             "windowBounds": { "x": 0, "y": 0, "width": 400, "height": 600 },
             "fontSize": 14,
             "lastOpenedNotesPath": null,
@@ -376,12 +388,12 @@ mod tests {
         }"#;
         let res1 = parse_and_validate_config(empty_openrouter);
         assert!(res1.is_err());
-        assert!(res1.unwrap_err().contains("masih kosong"));
+        assert!(res1.unwrap_err().contains("belum memiliki key valid"));
 
-        // Kasus 2: Groq key kosong
+        // Kasus 2: Groq keys array kosong
         let empty_groq = r#"{
-            "openrouterApiKey": "sk-or-valid",
-            "groqApiKey": "",
+            "openrouterApiKeys": ["sk-or-valid"],
+            "groqApiKeys": [],
             "windowBounds": { "x": 0, "y": 0, "width": 400, "height": 600 },
             "fontSize": 14,
             "lastOpenedNotesPath": null,
@@ -389,7 +401,7 @@ mod tests {
         }"#;
         let res2 = parse_and_validate_config(empty_groq);
         assert!(res2.is_err());
-        assert!(res2.unwrap_err().contains("masih kosong"));
+        assert!(res2.unwrap_err().contains("belum memiliki key valid"));
     }
 
     #[test]

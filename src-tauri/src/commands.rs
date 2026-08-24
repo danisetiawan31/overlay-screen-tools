@@ -6,7 +6,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +26,12 @@ pub struct PickNotesFileResponse {
 pub struct NotesState {
     pub content: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SendAudioBlobArgs {
+    pub bytes: Vec<u8>,
 }
 
 #[cfg(debug_assertions)]
@@ -95,6 +101,109 @@ pub fn update_font_size(
     state_guard.config = Some(updated_config);
 
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn send_audio_blob(args: SendAudioBlobArgs, app: tauri::AppHandle) -> Result<(), String> {
+    if args.bytes.is_empty() {
+        return Err("Audio blob kosong".to_string());
+    }
+
+    let (groq_keys, openrouter_keys, current_gen) = {
+        let state = app.state::<Mutex<OverlayState>>();
+        let state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let cfg = state_guard
+            .config
+            .clone()
+            .ok_or_else(|| "Config belum dimuat di memori aplikasi".to_string())?;
+        (
+            cfg.groq_api_keys,
+            cfg.openrouter_api_keys,
+            state_guard.qa_generation,
+        )
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Gagal inisialisasi HTTP client: {}", e))?;
+
+    // 1. STT via Groq dengan loop fallback API key
+    let transcript_res = crate::execute_fallback_keys(&groq_keys, |key| {
+        let key = key.to_string();
+        let client = client.clone();
+        let bytes = args.bytes.clone();
+        async move { crate::call_groq_stt(&client, &key, &bytes).await }
+    })
+    .await;
+
+    // Discard stale check setelah STT: jika F8 sudah ditekan ulang, buang hasil & skip call AI
+    if !crate::is_qa_generation_current(&app, current_gen) {
+        println!(
+            "[QA] Request generasi {} sudah stale setelah STT, discard transcript & skip AI call.",
+            current_gen
+        );
+        return Ok(());
+    }
+
+    let transcript = match transcript_res {
+        Ok(t) => {
+            let _ = app.emit(
+                "transcript:result",
+                crate::TranscriptResultPayload { text: t.clone() },
+            );
+            t
+        }
+        Err(err_msg) => {
+            let _ = app.emit(
+                "qa:error",
+                crate::QaErrorPayload {
+                    stage: "stt".to_string(),
+                    message: err_msg.clone(),
+                },
+            );
+            return Err(err_msg);
+        }
+    };
+
+    // 2. AI answering via OpenRouter dengan loop fallback API key
+    let answer_res = crate::execute_fallback_keys(&openrouter_keys, |key| {
+        let key = key.to_string();
+        let client = client.clone();
+        let transcript = transcript.clone();
+        async move { crate::call_openrouter_ai(&client, &key, &transcript).await }
+    })
+    .await;
+
+    // Discard stale check setelah AI: jika F8 sudah ditekan ulang, buang hasil answer
+    if !crate::is_qa_generation_current(&app, current_gen) {
+        println!(
+            "[QA] Request generasi {} sudah stale setelah AI, discard answer.",
+            current_gen
+        );
+        return Ok(());
+    }
+
+    match answer_res {
+        Ok(ans) => {
+            let _ = app.emit("answer:result", crate::AnswerResultPayload { text: ans });
+            Ok(())
+        }
+        Err(err_msg) => {
+            let _ = app.emit(
+                "qa:error",
+                crate::QaErrorPayload {
+                    stage: "ai".to_string(),
+                    message: err_msg.clone(),
+                },
+            );
+            Err(err_msg)
+        }
+    }
 }
 
 #[tauri::command]

@@ -20,6 +20,10 @@ vi.mock("./bindings", () => ({
       status: "ok",
       data: null,
     }),
+    sendAudioBlob: vi.fn().mockResolvedValue({
+      status: "ok",
+      data: null,
+    }),
   },
   events: {
     notesUpdate: {
@@ -28,22 +32,34 @@ vi.mock("./bindings", () => ({
     notesError: {
       listen: vi.fn().mockResolvedValue(vi.fn()),
     },
+    qaRecordingEnded: {
+      listen: vi.fn().mockResolvedValue(vi.fn()),
+    },
+    transcriptResult: {
+      listen: vi.fn().mockResolvedValue(vi.fn()),
+    },
+    answerResult: {
+      listen: vi.fn().mockResolvedValue(vi.fn()),
+    },
+    qaError: {
+      listen: vi.fn().mockResolvedValue(vi.fn()),
+    },
   },
 }));
 
 describe("App Component", () => {
   let mockUnlisten: () => void;
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-  let recordingStartedCallback: Function | null = null;
+  let recordingStartedCallbacks: Function[] = [];
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockUnlisten = vi.fn();
-    recordingStartedCallback = null;
+    recordingStartedCallbacks = [];
 
     vi.mocked(listen).mockImplementation((event, cb) => {
       if (event === "qa:recording-started") {
-        recordingStartedCallback = cb;
+        recordingStartedCallbacks.push(cb);
       }
       return Promise.resolve(mockUnlisten);
     });
@@ -93,7 +109,7 @@ describe("App Component", () => {
     fireEvent.click(qaTab);
 
     expect(screen.getByRole("tabpanel", { name: /^live q&a$/i })).toBeInTheDocument();
-    expect(screen.getByText("Live Q&A mode — segera hadir")).toBeInTheDocument();
+    expect(screen.getByText(/Siap — Tahan/i)).toBeInTheDocument();
 
     const notesTab = screen.getByRole("tab", { name: /^notes$/i });
     fireEvent.click(notesTab);
@@ -133,14 +149,20 @@ describe("App Component", () => {
       expect(screen.getByRole("tabpanel", { name: /^notes$/i })).toBeInTheDocument();
     });
 
-    expect(recordingStartedCallback).toBeDefined();
-
-    act(() => {
-      recordingStartedCallback?.({ event: "qa:recording-started", id: 1, payload: undefined });
+    await waitFor(() => {
+      expect(recordingStartedCallbacks.length).toBeGreaterThan(0);
     });
 
-    expect(screen.getByRole("tabpanel", { name: /^live q&a$/i })).toBeInTheDocument();
-    expect(screen.getByText("Live Q&A mode — segera hadir")).toBeInTheDocument();
+    act(() => {
+      recordingStartedCallbacks.forEach((cb) =>
+        cb({ event: "qa:recording-started", id: 1, payload: undefined })
+      );
+    });
+
+    const qaPanel = screen.getByRole("tabpanel", { name: /^live q&a$/i });
+    expect(qaPanel).not.toHaveClass("hidden");
+    const notesPanel = screen.getByRole("tabpanel", { name: /^notes$/i });
+    expect(notesPanel).toHaveClass("hidden");
   });
 
   it("ignores qa:recording-started event (defensive check) when qaAvailable is false", async () => {
@@ -155,14 +177,19 @@ describe("App Component", () => {
       expect(screen.getByRole("tabpanel", { name: /^notes$/i })).toBeInTheDocument();
     });
 
-    expect(recordingStartedCallback).toBeDefined();
+    await waitFor(() => {
+      expect(recordingStartedCallbacks.length).toBeGreaterThan(0);
+    });
 
     act(() => {
-      recordingStartedCallback?.({ event: "qa:recording-started", id: 1, payload: undefined });
+      recordingStartedCallbacks.forEach((cb) =>
+        cb({ event: "qa:recording-started", id: 1, payload: undefined })
+      );
     });
 
     // Tetap di tab Notes
-    expect(screen.getByRole("tabpanel", { name: /^notes$/i })).toBeInTheDocument();
+    const notesPanel = screen.getByRole("tabpanel", { name: /^notes$/i });
+    expect(notesPanel).not.toHaveClass("hidden");
   });
 
   it("handles race condition correctly using ref (responds to latest qaAvailable after deferred getAppState resolve)", async () => {
@@ -177,12 +204,14 @@ describe("App Component", () => {
 
     // Tunggu listener terpasang
     await waitFor(() => {
-      expect(recordingStartedCallback).toBeDefined();
+      expect(recordingStartedCallbacks.length).toBeGreaterThan(0);
     });
 
     // Fire event saat getAppState masih pending (qaAvailable masih null/false)
     act(() => {
-      recordingStartedCallback?.({ event: "qa:recording-started", id: 1, payload: undefined });
+      recordingStartedCallbacks.forEach((cb) =>
+        cb({ event: "qa:recording-started", id: 1, payload: undefined })
+      );
     });
 
     // Selesaikan resolve getAppState ke qaAvailable: true
@@ -199,10 +228,13 @@ describe("App Component", () => {
 
     // Fire event lagi setelah resolve -> ref terbaca true dan berpindah ke Live Q&A
     act(() => {
-      recordingStartedCallback?.({ event: "qa:recording-started", id: 2, payload: undefined });
+      recordingStartedCallbacks.forEach((cb) =>
+        cb({ event: "qa:recording-started", id: 2, payload: undefined })
+      );
     });
 
-    expect(screen.getByRole("tabpanel", { name: /^live q&a$/i })).toBeInTheDocument();
+    const qaPanel = screen.getByRole("tabpanel", { name: /^live q&a$/i });
+    expect(qaPanel).not.toHaveClass("hidden");
   });
 
   it("cleans up unlisten listener on unmount", async () => {
@@ -219,11 +251,11 @@ describe("App Component", () => {
 
     // Beri waktu microtask promise listen resolve
     await waitFor(() => {
-      expect(recordingStartedCallback).toBeDefined();
+      expect(recordingStartedCallbacks.length).toBeGreaterThan(0);
     });
 
     unmount();
 
-    expect(mockUnlisten).toHaveBeenCalledTimes(1);
+    expect(mockUnlisten).toHaveBeenCalled();
   });
 });
