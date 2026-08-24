@@ -15,12 +15,61 @@ pub struct AppState {
     pub qa_available: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PickNotesFileResponse {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NotesState {
+    pub content: Option<String>,
+    pub error: Option<String>,
+}
+
 #[cfg(debug_assertions)]
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TestTriggerHotkeyArgs {
     pub hotkey: String,
     pub state: String,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_notes_state(state: tauri::State<Mutex<OverlayState>>) -> Result<NotesState, String> {
+    let state_guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    Ok(NotesState {
+        content: state_guard.last_notes_content.clone(),
+        error: state_guard.last_notes_error.clone(),
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn pick_notes_file(app: tauri::AppHandle) -> Result<Option<PickNotesFileResponse>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let file_path = app
+        .dialog()
+        .file()
+        .add_filter("Markdown", &["md"])
+        .blocking_pick_file();
+
+    match file_path {
+        Some(fp) => {
+            let path_buf = fp.into_path().map_err(|err| err.to_string())?;
+            let path_str = path_buf.to_string_lossy().to_string();
+            crate::start_watching_notes_file(&app, path_buf)?;
+            Ok(Some(PickNotesFileResponse { path: path_str }))
+        }
+        None => Ok(None),
+    }
 }
 
 #[tauri::command]

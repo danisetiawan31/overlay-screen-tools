@@ -9,6 +9,7 @@ Konvensi (dari AGENTS.md §10): command `snake_case`, event pola `domain:action`
 | Command | Payload masuk | Return | Dipanggil kapan |
 |---|---|---|---|
 | `get_app_state` | — | `Result<{ fontSize: number, qaAvailable: boolean }, string>` | Sekali saat frontend startup |
+| `get_notes_state` | — | `Result<{ content: string \| null, error: string \| null }, string>` | Sekali saat komponen Notes mount (mengatasi race condition auto-restore startup) |
 | `update_font_size` | `{ size: number }` | `Result<(), string>` | User klik tombol +/− font size (validasi range: 10–32 px, default: 14 px) |
 | `pick_notes_file` | — | `Result<{ path: string } \| null, string>` (`null` = user cancel dialog) | User klik tombol pilih file di tab Notes |
 | `send_audio_blob` | `{ bytes: number[] }` | `Result<(), string>` | Setelah F8 dilepas, kalau `qa:recording-ended.belowThreshold == false` |
@@ -43,6 +44,17 @@ Didefinisikan sekali di Rust (`serde` + `specta::Type` derive), digenerate ke `b
 struct AppState {
     font_size: u32,
     qa_available: bool,
+}
+
+#[derive(serde::Serialize, specta::Type)]
+struct NotesState {
+    content: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(serde::Serialize, specta::Type)]
+struct PickNotesFileResponse {
+    path: String,
 }
 
 #[derive(serde::Deserialize, specta::Type)]

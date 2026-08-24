@@ -7,12 +7,18 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 export const commands = {
 	updateFontSize: (size: number) => typedError<null, string>(__TAURI_INVOKE("update_font_size", { size })),
 	getAppState: () => typedError<AppState, string>(__TAURI_INVOKE("get_app_state")),
+	getNotesState: () => typedError<NotesState, string>(__TAURI_INVOKE("get_notes_state")),
+	pickNotesFile: () => typedError<{
+	path: string,
+} | null, string>(__TAURI_INVOKE("pick_notes_file")),
 	testTriggerHotkey: (args: TestTriggerHotkeyArgs) => typedError<null, string>(__TAURI_INVOKE("test_trigger_hotkey", { args })),
 };
 
 /** Events */
 export const events = {
 	configError: makeEvent<ConfigErrorPayload>("config:error"),
+	notesError: makeEvent<NotesErrorPayload>("notes:error"),
+	notesUpdate: makeEvent<NotesUpdatePayload>("notes:update"),
 	qaRecordingEnded: makeEvent<RecordingEndedPayload>("qa:recording-ended"),
 };
 
@@ -24,6 +30,23 @@ export type AppState = {
 
 export type ConfigErrorPayload = {
 	message: string,
+};
+
+export type NotesErrorPayload = {
+	message: string,
+};
+
+export type NotesState = {
+	content: string | null,
+	error: string | null,
+};
+
+export type NotesUpdatePayload = {
+	content: string,
+};
+
+export type PickNotesFileResponse = {
+	path: string,
 };
 
 export type RecordingEndedPayload = {

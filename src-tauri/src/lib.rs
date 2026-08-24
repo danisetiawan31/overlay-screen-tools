@@ -3,6 +3,8 @@ pub mod config;
 
 use config::{Config, ConfigErrorPayload};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
@@ -26,6 +28,20 @@ pub const PUSH_TO_TALK_MIN_HOLD_MS: u64 = 400;
 #[tauri_specta(event_name = "qa:recording-ended")]
 pub struct RecordingEndedPayload {
     pub below_threshold: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "notes:update")]
+pub struct NotesUpdatePayload {
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "notes:error")]
+pub struct NotesErrorPayload {
+    pub message: String,
 }
 
 unsafe extern "system" fn enum_child_proc(hwnd: HWND, _lparam: LPARAM) -> i32 {
@@ -58,6 +74,9 @@ pub struct OverlayState {
     pub qa_available: bool,
     pub is_recording: bool,
     pub recording_start_instant: Option<std::time::Instant>,
+    pub notes_watcher: Option<notify::RecommendedWatcher>,
+    pub last_notes_content: Option<String>,
+    pub last_notes_error: Option<String>,
 }
 
 impl OverlayState {
@@ -78,6 +97,9 @@ impl Default for OverlayState {
             qa_available: true,
             is_recording: false,
             recording_start_instant: None,
+            notes_watcher: None,
+            last_notes_content: None,
+            last_notes_error: None,
         }
     }
 }
@@ -264,6 +286,246 @@ pub fn toggle_overlay_visibility(app: &tauri::AppHandle) {
     }
 }
 
+/// Helper murni untuk mengecek apakah path event dari watcher cocok dengan target file path.
+pub fn is_target_file_event(event_paths: &[PathBuf], target_path: &Path) -> bool {
+    let target_canonical = target_path.canonicalize().ok();
+    let target_file_name = target_path.file_name();
+
+    event_paths.iter().any(|p| {
+        if p == target_path {
+            return true;
+        }
+        if let (Some(ref tc), Ok(pc)) = (&target_canonical, p.canonicalize()) {
+            if tc == &pc {
+                return true;
+            }
+        }
+        if let (Some(ev_name), Some(tgt_name)) = (p.file_name(), target_file_name) {
+            if ev_name == tgt_name {
+                return true;
+            }
+        }
+        false
+    })
+}
+
+/// Menampilkan notifikasi desktop native lewat tauri-plugin-notification.
+pub fn show_tray_notification(app: &tauri::AppHandle, message: &str) {
+    if let Err(notify_err) = app
+        .notification()
+        .builder()
+        .title("Screen Overlay Tool")
+        .body(message)
+        .show()
+    {
+        eprintln!(
+            "[NOTIFICATION ERROR] Gagal menampilkan notifikasi: {}",
+            notify_err
+        );
+    }
+}
+
+/// Memancarkan event `notes:error` ke frontend sekaligus menampilkan notifikasi desktop native.
+pub fn trigger_notes_error(app: &tauri::AppHandle, message: &str) {
+    eprintln!("[NOTES ERROR] {}", message);
+    let state = app.state::<Mutex<OverlayState>>();
+    {
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state_guard.last_notes_error = Some(message.to_string());
+        state_guard.last_notes_content = None;
+    }
+    let _ = app.emit(
+        "notes:error",
+        NotesErrorPayload {
+            message: message.to_string(),
+        },
+    );
+    show_tray_notification(app, message);
+}
+
+/// Membaca file notes dan melakukan write-through update `last_opened_notes_path` ke `config.json` di disk.
+/// Mengembalikan tuple `(content, updated_config)` jika sukses.
+pub fn process_notes_file_load(
+    notes_path: &Path,
+    app_data_dir: &Path,
+) -> Result<(String, Config), String> {
+    let content = fs::read_to_string(notes_path).map_err(|err| {
+        format!(
+            "Gagal membaca file notes '{}': {}",
+            notes_path.display(),
+            err
+        )
+    })?;
+
+    let path_str = notes_path.to_string_lossy().to_string();
+    let updated_config =
+        config::update_config_last_opened_notes_path(app_data_dir, Some(path_str))?;
+
+    Ok((content, updated_config))
+}
+
+/// Membaca file notes, memancarkan event `notes:update`, menyimpan path ke config (write-through),
+/// dan memulai pemantauan file melalui parent directory watcher non-rekursif.
+pub fn start_watching_notes_file(
+    app: &tauri::AppHandle,
+    notes_path: PathBuf,
+) -> Result<(), String> {
+    let app_data_dir = match app.path().app_data_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            let msg = format!("Gagal mengakses direktori data aplikasi: {}", err);
+            trigger_notes_error(app, &msg);
+            return Err(msg);
+        }
+    };
+
+    // 1 & 2. Baca isi file notes + write-through ke config.json di disk
+    let (content, updated_config) = match process_notes_file_load(&notes_path, &app_data_dir) {
+        Ok(res) => res,
+        Err(err_msg) => {
+            trigger_notes_error(app, &err_msg);
+            return Err(err_msg);
+        }
+    };
+
+    // 3. Emit notes:update { content }
+    let _ = app.emit(
+        "notes:update",
+        NotesUpdatePayload {
+            content: content.clone(),
+        },
+    );
+
+    // 4. Update in-memory OverlayState
+    let state = app.state::<Mutex<OverlayState>>();
+    {
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state_guard.config = Some(updated_config);
+        state_guard.last_notes_content = Some(content);
+        state_guard.last_notes_error = None;
+    }
+
+    // 5. Inisialisasi watcher pada parent directory
+    let parent_dir = notes_path
+        .parent()
+        .ok_or_else(|| "Parent directory tidak valid untuk file notes".to_string())?
+        .to_path_buf();
+
+    let app_handle_for_watcher = app.clone();
+    let target_file_for_watcher = notes_path.clone();
+
+    use notify::Watcher;
+
+    let mut watcher =
+        notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| match res {
+            Ok(event) => {
+                if is_target_file_event(&event.paths, &target_file_for_watcher) {
+                    if target_file_for_watcher.exists() {
+                        match fs::read_to_string(&target_file_for_watcher) {
+                            Ok(new_content) => {
+                                println!(
+                                    "[WATCHER] File notes di-update: {}",
+                                    target_file_for_watcher.display()
+                                );
+                                let state = app_handle_for_watcher.state::<Mutex<OverlayState>>();
+                                {
+                                    let mut state_guard = match state.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => poisoned.into_inner(),
+                                    };
+                                    state_guard.last_notes_content = Some(new_content.clone());
+                                    state_guard.last_notes_error = None;
+                                }
+                                let _ = app_handle_for_watcher.emit(
+                                    "notes:update",
+                                    NotesUpdatePayload {
+                                        content: new_content,
+                                    },
+                                );
+                            }
+                            Err(err) => {
+                                let msg = format!(
+                                    "Gagal membaca ulang file notes '{}': {}",
+                                    target_file_for_watcher.display(),
+                                    err
+                                );
+                                trigger_notes_error(&app_handle_for_watcher, &msg);
+                            }
+                        }
+                    } else {
+                        let msg = format!(
+                            "File notes '{}' telah dihapus atau dipindahkan.",
+                            target_file_for_watcher.display()
+                        );
+                        trigger_notes_error(&app_handle_for_watcher, &msg);
+                    }
+                }
+            }
+            Err(err) => {
+                let msg = format!("Terjadi kesalahan pada file watcher: {}", err);
+                trigger_notes_error(&app_handle_for_watcher, &msg);
+            }
+        })
+        .map_err(|err| format!("Gagal menginisialisasi file watcher: {}", err))?;
+
+    watcher
+        .watch(&parent_dir, notify::RecursiveMode::NonRecursive)
+        .map_err(|err| {
+            format!(
+                "Gagal memantau direktori '{}': {}",
+                parent_dir.display(),
+                err
+            )
+        })?;
+
+    // Simpan watcher ke OverlayState (secara otomatis men-drop watcher lama jika ada via RAII)
+    {
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state_guard.notes_watcher = Some(watcher);
+    }
+
+    println!(
+        "[WATCHER] Memulai pemantauan file notes: {}",
+        notes_path.display()
+    );
+    Ok(())
+}
+
+/// Menangani auto-restore file notes saat startup aplikasi.
+pub fn handle_startup_notes_restore(app: &tauri::AppHandle, config: Option<&Config>) {
+    let notes_path_str = match config.and_then(|c| c.last_opened_notes_path.as_deref()) {
+        Some(path) => path,
+        None => {
+            // Skenario 1: lastOpenedNotesPath == null (belum pernah pilih file) -> no-op
+            return;
+        }
+    };
+
+    let notes_path = PathBuf::from(notes_path_str);
+    if notes_path.exists() {
+        // Skenario 2: file valid & ada -> start_watching_notes_file
+        if let Err(err) = start_watching_notes_file(app, notes_path) {
+            eprintln!("[NOTES RESTORE ERROR] {}", err);
+        }
+    } else {
+        // Skenario 3: file hilang / dipindah -> trigger_notes_error
+        let msg = format!(
+            "File notes sebelumnya '{}' tidak ditemukan atau telah dipindahkan.",
+            notes_path_str
+        );
+        trigger_notes_error(app, &msg);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(debug_assertions)]
@@ -271,17 +533,31 @@ pub fn run() {
         .commands(collect_commands![
             commands::update_font_size,
             commands::get_app_state,
+            commands::get_notes_state,
+            commands::pick_notes_file,
             commands::test_trigger_hotkey
         ])
-        .events(collect_events![ConfigErrorPayload, RecordingEndedPayload]);
+        .events(collect_events![
+            ConfigErrorPayload,
+            RecordingEndedPayload,
+            NotesUpdatePayload,
+            NotesErrorPayload
+        ]);
 
     #[cfg(not(debug_assertions))]
     let builder = Builder::<tauri::Wry>::new()
         .commands(collect_commands![
             commands::update_font_size,
-            commands::get_app_state
+            commands::get_app_state,
+            commands::get_notes_state,
+            commands::pick_notes_file
         ])
-        .events(collect_events![ConfigErrorPayload, RecordingEndedPayload]);
+        .events(collect_events![
+            ConfigErrorPayload,
+            RecordingEndedPayload,
+            NotesUpdatePayload,
+            NotesErrorPayload
+        ]);
 
     #[cfg(debug_assertions)]
     if let Err(err) = builder.export(
@@ -704,6 +980,9 @@ pub fn run() {
                 }
             }
 
+            // 7. Auto-restore notes file jika tersimpan di config
+            handle_startup_notes_restore(app.handle(), loaded_config_opt.as_ref());
+
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -899,5 +1178,167 @@ mod tests {
         assert_eq!(res, None);
         assert!(!is_recording);
         assert_eq!(start_instant, None);
+    }
+
+    #[test]
+    fn test_is_target_file_event_matching_and_filtering() {
+        let temp_dir = std::env::temp_dir().join("poc_overlay_test_filter");
+        let _ = fs::create_dir_all(&temp_dir);
+        let target_file = temp_dir.join("notes.md");
+        let other_file = temp_dir.join("other.txt");
+        let _ = fs::write(&target_file, "content");
+        let _ = fs::write(&other_file, "other content");
+
+        // 1. Path persis sama
+        assert!(is_target_file_event(&[target_file.clone()], &target_file));
+
+        // 2. Event berisi multiple paths termasuk target_file
+        assert!(is_target_file_event(
+            &[other_file.clone(), target_file.clone()],
+            &target_file
+        ));
+
+        // 3. Event hanya berisi other_file -> harus false
+        assert!(!is_target_file_event(&[other_file.clone()], &target_file));
+
+        // 4. Event paths kosong -> harus false
+        assert!(!is_target_file_event(&[], &target_file));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_startup_restore_when_path_is_none_no_action() {
+        let config = Config {
+            last_opened_notes_path: None,
+            ..Default::default()
+        };
+        // Menguji logic ekstraksi path: None menghasilkan no-op
+        let path_opt = config.last_opened_notes_path.as_deref();
+        assert_eq!(path_opt, None);
+    }
+
+    #[test]
+    fn test_startup_restore_when_path_valid_reads_content() {
+        let temp_dir = std::env::temp_dir().join("poc_overlay_test_restore_valid");
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join("valid_notes.md");
+        let expected_content = "# Hello Notes\nIni konten awal.";
+        fs::write(&test_file, expected_content).unwrap();
+
+        assert!(test_file.exists());
+        let read_content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(read_content, expected_content);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_startup_restore_when_path_missing_triggers_error() {
+        let missing_path = PathBuf::from("C:\\non_existent_folder_xyz_123\\missing_notes.md");
+        assert!(!missing_path.exists());
+
+        let read_res = fs::read_to_string(&missing_path);
+        assert!(read_res.is_err());
+    }
+
+    #[test]
+    fn test_notes_watcher_detects_real_file_modification() {
+        use notify::Watcher;
+
+        let temp_dir = std::env::temp_dir().join("poc_overlay_test_real_watcher");
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join("test_real_notes.md");
+        fs::write(&test_file, "Initial content").unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let target_file = test_file.clone();
+
+        let mut watcher =
+            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    if is_target_file_event(&event.paths, &target_file) {
+                        let _ = tx.send(true);
+                    }
+                }
+            })
+            .unwrap();
+
+        watcher
+            .watch(&temp_dir, notify::RecursiveMode::NonRecursive)
+            .unwrap();
+
+        // Modifikasi file secara nyata di disk
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        fs::write(&test_file, "Updated content from test").unwrap();
+
+        // Tunggu event diterima oleh watcher channel (timeout 3 detik)
+        let received = rx.recv_timeout(std::time::Duration::from_secs(3));
+        assert!(received.is_ok());
+        assert_eq!(received.unwrap(), true);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_start_watching_notes_file_integrated_flow() {
+        let temp_dir = std::env::temp_dir().join("poc_overlay_test_integrated_notes");
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join("my_notes.md");
+        let content = "# Markdown Title\nIntegrated test content.";
+        fs::write(&test_file, content).unwrap();
+
+        let app_data_dir = temp_dir.join("app_data");
+
+        // Jalankan logic terintegrasi: baca file + write-through ke config.json
+        let (read_content, updated_config) =
+            process_notes_file_load(&test_file, &app_data_dir).unwrap();
+
+        // 1. Verifikasi content yang dibaca untuk emit notes:update persis
+        assert_eq!(read_content, content);
+
+        // 2. Verifikasi config in-memory ter-update dengan path file
+        assert_eq!(
+            updated_config.last_opened_notes_path,
+            Some(test_file.to_string_lossy().to_string())
+        );
+
+        // 3. Verifikasi persistensi nyata di file config.json di disk
+        let config_path = config::get_config_path(&app_data_dir);
+        let raw_json = fs::read_to_string(&config_path).unwrap();
+        let from_disk: Config = serde_json::from_str(&raw_json).unwrap();
+        assert_eq!(
+            from_disk.last_opened_notes_path,
+            Some(test_file.to_string_lossy().to_string())
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_get_notes_state_when_empty_returns_both_none() {
+        let state = OverlayState::default();
+        assert_eq!(state.last_notes_content, None);
+        assert_eq!(state.last_notes_error, None);
+    }
+
+    #[test]
+    fn test_get_notes_state_reflects_content_and_error_states() {
+        let mut state = OverlayState::default();
+
+        // 1. Setelah sukses restore/load
+        state.last_notes_content = Some("# Restored content".to_string());
+        state.last_notes_error = None;
+        assert_eq!(
+            state.last_notes_content,
+            Some("# Restored content".to_string())
+        );
+        assert_eq!(state.last_notes_error, None);
+
+        // 2. Setelah error restore/runtime
+        state.last_notes_error = Some("File not found".to_string());
+        state.last_notes_content = None;
+        assert_eq!(state.last_notes_content, None);
+        assert_eq!(state.last_notes_error, Some("File not found".to_string()));
     }
 }

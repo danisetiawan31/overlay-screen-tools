@@ -217,6 +217,31 @@ pub fn update_config_window_bounds(
     Ok(config)
 }
 
+/// Memperbarui field `last_opened_notes_path` di `config.json`.
+pub fn update_config_last_opened_notes_path(
+    app_data_dir: &Path,
+    path: Option<String>,
+) -> Result<Config, String> {
+    let config_path = get_config_path(app_data_dir);
+    let mut config = if config_path.exists() {
+        let raw = fs::read_to_string(&config_path).map_err(|err| {
+            format!(
+                "Gagal membaca file config.json di '{}': {}",
+                config_path.display(),
+                err
+            )
+        })?;
+        serde_json::from_str::<Config>(&raw).unwrap_or_default()
+    } else {
+        Config::default()
+    };
+
+    config.last_opened_notes_path = path;
+    save_config(app_data_dir, &config)?;
+
+    Ok(config)
+}
+
 /// Representasi area monitor dalam koordinat fisik (pixels).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MonitorRect {
@@ -584,6 +609,31 @@ mod tests {
         let raw = fs::read_to_string(&file_path).unwrap();
         let from_disk: Config = serde_json::from_str(&raw).unwrap();
         assert_eq!(from_disk.window_bounds, initial_bounds);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_update_config_last_opened_notes_path_persists_to_disk() {
+        let temp_dir = std::env::temp_dir().join("poc_overlay_test_notes_path");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let test_path = "C:\\path\\to\\my_notes.md".to_string();
+        let updated =
+            update_config_last_opened_notes_path(&temp_dir, Some(test_path.clone())).unwrap();
+        assert_eq!(updated.last_opened_notes_path, Some(test_path.clone()));
+
+        let file_path = get_config_path(&temp_dir);
+        let raw = fs::read_to_string(&file_path).unwrap();
+        let from_disk: Config = serde_json::from_str(&raw).unwrap();
+        assert_eq!(from_disk.last_opened_notes_path, Some(test_path));
+
+        // Test updating to None
+        let updated_none = update_config_last_opened_notes_path(&temp_dir, None).unwrap();
+        assert_eq!(updated_none.last_opened_notes_path, None);
+        let raw2 = fs::read_to_string(&file_path).unwrap();
+        let from_disk2: Config = serde_json::from_str(&raw2).unwrap();
+        assert_eq!(from_disk2.last_opened_notes_path, None);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

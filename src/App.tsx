@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { commands } from "./bindings";
 import { FontSizeControl } from "./components/FontSizeControl";
 import { TabNav, TabType } from "./components/TabNav";
+import { NotesPanel } from "./components/NotesPanel";
 
 export const App: React.FC = () => {
   const [fontSize, setFontSize] = useState<number | null>(null);
@@ -96,7 +97,7 @@ export const App: React.FC = () => {
     <div className="flex flex-col h-screen w-screen bg-zinc-950 text-zinc-100 font-sans">
       <header
         data-tauri-drag-region
-        className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800 cursor-move"
+        className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800 cursor-move select-none"
       >
         <h1 className="text-xs font-semibold text-zinc-400 select-none">Screen Overlay Tool</h1>
         <div className="flex items-center space-x-2">
@@ -144,16 +145,18 @@ export const App: React.FC = () => {
             onTabChange={setActiveTab}
             qaAvailable={qaAvailable === true}
           />
-          <main className="flex-1 p-4 overflow-auto">
+          <main
+            className="flex-1 p-4 overflow-hidden min-h-0"
+            style={{ fontSize: fontSize ? `${fontSize}px` : undefined }}
+          >
             {activeTab === "notes" && (
               <div
                 role="tabpanel"
                 id="panel-notes"
                 aria-labelledby="tab-notes"
-                className="h-full flex flex-col items-center justify-center rounded-lg border border-zinc-800/60 bg-zinc-900/30 p-4 text-center"
+                className="h-full"
               >
-                <h2 className="text-zinc-300 font-semibold text-sm mb-1">Notes Mode</h2>
-                <p className="text-zinc-500 text-xs">Notes mode — segera hadir</p>
+                <NotesPanel />
               </div>
             )}
             {activeTab === "qa" && (

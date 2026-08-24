@@ -12,6 +12,22 @@ vi.mock("./bindings", () => ({
   commands: {
     getAppState: vi.fn(),
     updateFontSize: vi.fn(),
+    getNotesState: vi.fn().mockResolvedValue({
+      status: "ok",
+      data: { content: null, error: null },
+    }),
+    pickNotesFile: vi.fn().mockResolvedValue({
+      status: "ok",
+      data: null,
+    }),
+  },
+  events: {
+    notesUpdate: {
+      listen: vi.fn().mockResolvedValue(vi.fn()),
+    },
+    notesError: {
+      listen: vi.fn().mockResolvedValue(vi.fn()),
+    },
   },
 }));
 
@@ -30,6 +46,11 @@ describe("App Component", () => {
         recordingStartedCallback = cb;
       }
       return Promise.resolve(mockUnlisten);
+    });
+
+    vi.mocked(commands.getNotesState).mockResolvedValue({
+      status: "ok",
+      data: { content: null, error: null },
     });
   });
 
@@ -53,7 +74,7 @@ describe("App Component", () => {
     });
 
     expect(screen.getByRole("tabpanel", { name: /^notes$/i })).toBeInTheDocument();
-    expect(screen.getByText("Notes mode — segera hadir")).toBeInTheDocument();
+    expect(screen.getByText("File Mode")).toBeInTheDocument();
   });
 
   it("switches tabs manually between Notes and Live Q&A when qaAvailable is true", async () => {
@@ -78,7 +99,7 @@ describe("App Component", () => {
     fireEvent.click(notesTab);
 
     expect(screen.getByRole("tabpanel", { name: /^notes$/i })).toBeInTheDocument();
-    expect(screen.getByText("Notes mode — segera hadir")).toBeInTheDocument();
+    expect(screen.getByText("File Mode")).toBeInTheDocument();
   });
 
   it("disables Live Q&A tab when qaAvailable is false", async () => {
