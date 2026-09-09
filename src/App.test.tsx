@@ -14,7 +14,7 @@ vi.mock("./bindings", () => ({
     updateFontSize: vi.fn(),
     getNotesState: vi.fn().mockResolvedValue({
       status: "ok",
-      data: { content: null, error: null },
+      data: { documents: [], activePath: null, content: null, error: null },
     }),
     pickNotesFile: vi.fn().mockResolvedValue({
       status: "ok",
@@ -66,7 +66,7 @@ describe("App Component", () => {
 
     vi.mocked(commands.getNotesState).mockResolvedValue({
       status: "ok",
-      data: { content: null, error: null },
+      data: { documents: [], activePath: null, content: null, error: null },
     });
   });
 

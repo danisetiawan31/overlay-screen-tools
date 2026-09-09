@@ -3,13 +3,15 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { FolderOpen, FileText, Edit3, AlertCircle } from "lucide-react";
-import { commands, events } from "../bindings";
+import { commands, events, type NoteDocument } from "../bindings";
+import { DocumentTabBar } from "./DocumentTabBar";
 
 type NotesSubMode = "file" | "scratchpad";
 
 export function NotesPanel() {
   const [subMode, setSubMode] = useState<NotesSubMode>("file");
-  const [fileContent, setFileContent] = useState<string | null>(null);
+  const [documents, setDocuments] = useState<NoteDocument[]>([]);
+  const [activePath, setActivePath] = useState<string | null>(null);
   const [unifiedError, setUnifiedError] = useState<string | null>(null);
   const [scratchpadText, setScratchpadText] = useState<string>("");
   const [isPicking, setIsPicking] = useState<boolean>(false);
@@ -21,12 +23,12 @@ export function NotesPanel() {
     commands.getNotesState().then((res) => {
       if (!isMounted) return;
       if (res.status === "ok") {
-        if (res.data.content !== null) {
-          setFileContent(res.data.content);
-          setUnifiedError(null);
-        }
+        setDocuments(res.data.documents);
+        setActivePath(res.data.activePath);
         if (res.data.error !== null) {
           setUnifiedError(res.data.error);
+        } else {
+          setUnifiedError(null);
         }
       } else {
         setUnifiedError(res.error);
@@ -46,29 +48,43 @@ export function NotesPanel() {
     let unlistenError: (() => void) | null = null;
     let isCleanedUp = false;
 
-    events.notesUpdate.listen((event) => {
-      if (isCleanedUp) return;
-      setFileContent(event.payload.content);
-      // Event notesUpdate sukses selalu membersihkan banner error (terpadu)
-      setUnifiedError(null);
-    }).then((unsub) => {
-      if (isCleanedUp) {
-        unsub();
-      } else {
-        unlistenUpdate = unsub;
-      }
-    });
+    events.notesUpdate
+      .listen((event) => {
+        if (isCleanedUp) return;
+        setDocuments((prev) => {
+          const idx = prev.findIndex((d) => d.path === event.payload.path);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...next[idx], content: event.payload.content };
+            return next;
+          }
+          const title = event.payload.path.split(/[/\\]/).pop() || event.payload.path;
+          return [...prev, { path: event.payload.path, title, content: event.payload.content }];
+        });
+        setActivePath((curr) => curr ?? event.payload.path);
+        // Event notesUpdate sukses selalu membersihkan banner error (terpadu)
+        setUnifiedError(null);
+      })
+      .then((unsub) => {
+        if (isCleanedUp) {
+          unsub();
+        } else {
+          unlistenUpdate = unsub;
+        }
+      });
 
-    events.notesError.listen((event) => {
-      if (isCleanedUp) return;
-      setUnifiedError(event.payload.message);
-    }).then((unsub) => {
-      if (isCleanedUp) {
-        unsub();
-      } else {
-        unlistenError = unsub;
-      }
-    });
+    events.notesError
+      .listen((event) => {
+        if (isCleanedUp) return;
+        setUnifiedError(event.payload.message);
+      })
+      .then((unsub) => {
+        if (isCleanedUp) {
+          unsub();
+        } else {
+          unlistenError = unsub;
+        }
+      });
 
     return () => {
       isCleanedUp = true;
@@ -77,20 +93,61 @@ export function NotesPanel() {
     };
   }, [subMode]);
 
-  // 3. Handler tombol "Pilih File" dengan penanganan 3 cabang (path, cancel null, command error)
+  // 3. Tab handlers
+  const handleSelectTab = (path: string) => {
+    setActivePath(path);
+    commands.setActiveNotesFile(path).catch((err: unknown) => {
+      setUnifiedError(err instanceof Error ? err.message : String(err));
+    });
+  };
+
+  const handleCloseTab = async (path: string) => {
+    try {
+      const res = await commands.closeNotesFile(path);
+      if (res.status === "error") {
+        setUnifiedError(res.error);
+      }
+    } catch (err: unknown) {
+      setUnifiedError(err instanceof Error ? err.message : String(err));
+    }
+    setDocuments((prev) => {
+      const next = prev.filter((d) => d.path !== path);
+      if (activePath === path) {
+        const closedIdx = prev.findIndex((d) => d.path === path);
+        let newActive: string | null = null;
+        if (next.length > 0) {
+          const candidateIdx = Math.min(closedIdx, next.length - 1);
+          newActive = next[candidateIdx].path;
+        }
+        setActivePath(newActive);
+      }
+      return next;
+    });
+  };
+
+  // 4. Handler tombol "Pilih File" / New Tab dengan penanganan 3 cabang
   const handlePickFile = async () => {
     setIsPicking(true);
     try {
       const res = await commands.pickNotesFile();
       if (res.status === "ok") {
         if (res.data !== null) {
-          // Skenario A: User memilih file valid -> UI menunggu event notesUpdate berikutnya
-          // Error lama di-clear
+          const picked = res.data;
+          setDocuments((prev) => {
+            const idx = prev.findIndex((d) => d.path === picked.path);
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = { ...next[idx], title: picked.title, content: picked.content };
+              return next;
+            }
+            return [...prev, { path: picked.path, title: picked.title, content: picked.content }];
+          });
+          setActivePath(picked.path);
           setUnifiedError(null);
         }
-        // Skenario B: res.data === null (User klik cancel) -> no-op bersih
+        // res.data === null (User klik cancel) -> no-op bersih
       } else {
-        // Skenario C: Command-level error (misal invoke gagal)
+        // Command-level error (misal invoke gagal)
         setUnifiedError(res.error);
       }
     } catch (err: unknown) {
@@ -100,10 +157,14 @@ export function NotesPanel() {
     }
   };
 
+  const activeDocument =
+    documents.find((d) => d.path === activePath) ??
+    (documents.length > 0 ? documents[0] : null);
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Sub-mode switcher header */}
-      <div className="flex items-center justify-between pb-3 border-b border-zinc-800/80 mb-3 select-none">
+      <div className="flex items-center justify-between pb-3 border-b border-zinc-800/80 mb-2 select-none">
         <div className="flex items-center gap-1 bg-zinc-900/90 p-1 rounded-lg border border-zinc-800">
           <button
             type="button"
@@ -144,6 +205,20 @@ export function NotesPanel() {
         )}
       </div>
 
+      {/* Document Tab Bar */}
+      {subMode === "file" && documents.length > 0 && (
+        <div className="pb-2 border-b border-zinc-800/60 mb-2">
+          <DocumentTabBar
+            documents={documents}
+            activePath={activePath}
+            onSelectTab={handleSelectTab}
+            onCloseTab={handleCloseTab}
+            onNewTab={handlePickFile}
+            isPicking={isPicking}
+          />
+        </div>
+      )}
+
       {/* Unified Persistent Error Banner */}
       {unifiedError && (
         <div
@@ -161,13 +236,13 @@ export function NotesPanel() {
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto min-h-0">
         {subMode === "file" ? (
-          fileContent !== null ? (
+          activeDocument !== null ? (
             <div className="prose prose-invert prose-zinc max-w-none text-zinc-200 leading-relaxed break-words space-y-2 [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-zinc-100 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-zinc-100 [&_h3]:text-sm [&_h3]:font-medium [&_h3]:text-zinc-200 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_code]:bg-zinc-900 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-amber-300 [&_pre]:bg-zinc-900/90 [&_pre]:border [&_pre]:border-zinc-800 [&_pre]:p-3 [&_pre]:rounded-lg [&_table]:border-collapse [&_th]:border [&_th]:border-zinc-800 [&_th]:p-1.5 [&_td]:border [&_td]:border-zinc-800 [&_td]:p-1.5">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeHighlight]}
               >
-                {fileContent}
+                {activeDocument.content}
               </ReactMarkdown>
             </div>
           ) : (

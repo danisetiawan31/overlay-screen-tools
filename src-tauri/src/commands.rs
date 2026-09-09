@@ -24,13 +24,25 @@ pub struct AppState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct NoteDocument {
+    pub path: String,
+    pub title: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct PickNotesFileResponse {
     pub path: String,
+    pub title: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NotesState {
+    pub documents: Vec<NoteDocument>,
+    pub active_path: Option<String>,
     pub content: Option<String>,
     pub error: Option<String>,
 }
@@ -57,7 +69,46 @@ pub fn get_notes_state(state: tauri::State<Mutex<OverlayState>>) -> Result<Notes
         Err(poisoned) => poisoned.into_inner(),
     };
 
+    let ordered_paths = state_guard
+        .config
+        .as_ref()
+        .map(|c| c.get_effective_opened_notes_paths())
+        .unwrap_or_default();
+
+    let mut documents = Vec::new();
+    for p in &ordered_paths {
+        if let Some(cnt) = state_guard.opened_notes.get(p) {
+            let path_buf = std::path::PathBuf::from(p);
+            let title = path_buf
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| p.clone());
+            documents.push(NoteDocument {
+                path: p.clone(),
+                title,
+                content: cnt.clone(),
+            });
+        }
+    }
+
+    for (p, cnt) in &state_guard.opened_notes {
+        if !ordered_paths.contains(p) {
+            let path_buf = std::path::PathBuf::from(p);
+            let title = path_buf
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| p.clone());
+            documents.push(NoteDocument {
+                path: p.clone(),
+                title,
+                content: cnt.clone(),
+            });
+        }
+    }
+
     Ok(NotesState {
+        documents,
+        active_path: state_guard.active_notes_path.clone(),
         content: state_guard.last_notes_content.clone(),
         error: state_guard.last_notes_error.clone(),
     })
@@ -106,7 +157,7 @@ pub unsafe extern "system" fn enum_dialog_window_proc(hwnd: HWND, lparam: LPARAM
 }
 
 /// Men-spawn thread background pengawas untuk memproteksi native file dialog dari screen capture (TDD §3).
-pub fn spawn_dialog_watcher_thread(main_hwnd_val: isize) {
+pub fn spawn_dialog_watcher_thread(app: tauri::AppHandle, main_hwnd_val: isize) {
     // SAFETY: GetCurrentProcessId tidak memerlukan parameter atau alokasi memori dan selalu aman dipanggil.
     let current_pid = unsafe { GetCurrentProcessId() };
 
@@ -140,6 +191,14 @@ pub fn spawn_dialog_watcher_thread(main_hwnd_val: isize) {
                         dialog_hwnd, res
                     );
                 }
+
+                // Catat HWND dialog aktif di OverlayState agar bisa dikontrol (misal diabaikan saat toggle visibility F9)
+                let state = app.state::<Mutex<crate::OverlayState>>();
+                let mut state_guard = match state.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                state_guard.active_dialog_hwnd = Some(context.found_dialog_hwnd_val);
                 break; // Keluar begitu HWND dialog berhasil diproteksi
             }
 
@@ -163,7 +222,13 @@ pub fn pick_notes_file(app: tauri::AppHandle) -> Result<Option<PickNotesFileResp
     };
 
     if main_hwnd != 0 {
-        spawn_dialog_watcher_thread(main_hwnd);
+        spawn_dialog_watcher_thread(app.clone(), main_hwnd);
+    }
+
+    // Nonaktifkan always_on_top sementara agar dialog file picker OS muncul di depan secara natural
+    let main_win = app.get_webview_window("main");
+    if let Some(ref win) = main_win {
+        let _ = win.set_always_on_top(false);
     }
 
     let file_path = app
@@ -172,15 +237,52 @@ pub fn pick_notes_file(app: tauri::AppHandle) -> Result<Option<PickNotesFileResp
         .add_filter("Markdown", &["md"])
         .blocking_pick_file();
 
+    // Kembalikan always_on_top setelah dialog selesai
+    if let Some(ref win) = main_win {
+        let _ = win.set_always_on_top(true);
+    }
+
+    // Reset active_dialog_hwnd setelah dialog selesai (baik user memilih file atau cancel / ditutup via F9)
+    {
+        let state = app.state::<Mutex<crate::OverlayState>>();
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state_guard.active_dialog_hwnd = None;
+    }
+
     match file_path {
         Some(fp) => {
             let path_buf = fp.into_path().map_err(|err| err.to_string())?;
             let path_str = path_buf.to_string_lossy().to_string();
-            crate::start_watching_notes_file(&app, path_buf)?;
-            Ok(Some(PickNotesFileResponse { path: path_str }))
+            let title = path_buf
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path_str.clone());
+            let content = crate::start_watching_notes_file(&app, path_buf)?;
+            Ok(Some(PickNotesFileResponse {
+                path: path_str,
+                title,
+                content,
+            }))
         }
         None => Ok(None),
     }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_active_notes_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    crate::set_active_notes_file_core(&app, &path)?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn close_notes_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    crate::close_notes_file_core(&app, &path)?;
+    Ok(())
 }
 
 #[tauri::command]

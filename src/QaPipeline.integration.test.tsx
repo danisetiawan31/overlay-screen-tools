@@ -76,7 +76,7 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
 
     vi.spyOn(commands, "getNotesState").mockResolvedValue({
       status: "ok",
-      data: { content: null, error: null },
+      data: { documents: [], activePath: null, content: null, error: null },
     });
 
     vi.spyOn(commands, "sendAudioBlob").mockResolvedValue({

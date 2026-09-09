@@ -5,6 +5,7 @@ import { FontSizeControl } from "./components/FontSizeControl";
 import { TabNav, TabType } from "./components/TabNav";
 import { NotesPanel } from "./components/NotesPanel";
 import { QaPanel } from "./components/QaPanel";
+import appLogo from "./assets/icon-dani.svg";
 
 export const App: React.FC = () => {
   const [fontSize, setFontSize] = useState<number | null>(null);
@@ -100,7 +101,10 @@ export const App: React.FC = () => {
         data-tauri-drag-region
         className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800 cursor-move select-none"
       >
-        <h1 className="text-xs font-semibold text-zinc-400 select-none">Screen Overlay Tool</h1>
+        <div className="flex items-center space-x-2 select-none">
+          <img src={appLogo} alt="App Logo" className="w-4 h-4 rounded-sm object-contain" />
+          <h1 className="text-xs font-semibold text-zinc-400 select-none">Screen Overlay Tool</h1>
+        </div>
         <div className="flex items-center space-x-2">
           {fontSize !== null && (
             <FontSizeControl

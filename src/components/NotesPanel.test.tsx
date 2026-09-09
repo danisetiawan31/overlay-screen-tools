@@ -10,11 +10,21 @@ describe("NotesPanel Component", () => {
     // Default mock untuk getNotesState
     vi.spyOn(commands, "getNotesState").mockResolvedValue({
       status: "ok",
-      data: { content: null, error: null },
+      data: { documents: [], activePath: null, content: null, error: null },
     });
 
     // Default mock untuk pickNotesFile
     vi.spyOn(commands, "pickNotesFile").mockResolvedValue({
+      status: "ok",
+      data: null,
+    });
+
+    // Default mock untuk setActiveNotesFile & closeNotesFile
+    vi.spyOn(commands, "setActiveNotesFile").mockResolvedValue({
+      status: "ok",
+      data: null,
+    });
+    vi.spyOn(commands, "closeNotesFile").mockResolvedValue({
       status: "ok",
       data: null,
     });
@@ -27,7 +37,12 @@ describe("NotesPanel Component", () => {
   it("1. initial mount calls getNotesState and renders restored markdown content", async () => {
     vi.spyOn(commands, "getNotesState").mockResolvedValue({
       status: "ok",
-      data: { content: "# Heading 1\n* List item restored", error: null },
+      data: {
+        documents: [{ path: "C:\\notes.md", title: "notes.md", content: "# Heading 1\n* List item restored" }],
+        activePath: "C:\\notes.md",
+        content: "# Heading 1\n* List item restored",
+        error: null,
+      },
     });
 
     render(<NotesPanel />);
@@ -43,7 +58,12 @@ describe("NotesPanel Component", () => {
   it("2. initial mount renders persistent error banner when getNotesState returns error", async () => {
     vi.spyOn(commands, "getNotesState").mockResolvedValue({
       status: "ok",
-      data: { content: null, error: "File notes sebelumnya 'C:\\notes.md' tidak ditemukan." },
+      data: {
+        documents: [],
+        activePath: null,
+        content: null,
+        error: "File notes sebelumnya 'C:\\notes.md' tidak ditemukan.",
+      },
     });
 
     render(<NotesPanel />);
@@ -66,7 +86,7 @@ describe("NotesPanel Component", () => {
   it("4. pickNotesFile success with path does not show error banner", async () => {
     vi.spyOn(commands, "pickNotesFile").mockResolvedValue({
       status: "ok",
-      data: { path: "C:\\docs\\notes.md" },
+      data: { path: "C:\\docs\\notes.md", title: "notes.md", content: "# Notes" },
     });
 
     render(<NotesPanel />);
@@ -119,16 +139,16 @@ describe("NotesPanel Component", () => {
   });
 
   it("7. notesUpdate event renders markdown content and clears existing error banner", async () => {
-    let updateCallback: ((event: { payload: { content: string } }) => void) | null = null;
+    let updateCallback: ((event: { payload: { path: string; content: string } }) => void) | null = null;
     vi.spyOn(events.notesUpdate, "listen").mockImplementation(async (cb) => {
-      updateCallback = cb as unknown as (event: { payload: { content: string } }) => void;
+      updateCallback = cb as unknown as (event: { payload: { path: string; content: string } }) => void;
       return vi.fn();
     });
 
     // Awal: ada error dari getNotesState
     vi.spyOn(commands, "getNotesState").mockResolvedValue({
       status: "ok",
-      data: { content: null, error: "File lama error" },
+      data: { documents: [], activePath: null, content: null, error: "File lama error" },
     });
 
     render(<NotesPanel />);
@@ -137,7 +157,7 @@ describe("NotesPanel Component", () => {
     // Simulasi event notesUpdate masuk
     expect(updateCallback).not.toBeNull();
     act(() => {
-      updateCallback!({ payload: { content: "# Updated Title\nParagraf baru." } });
+      updateCallback!({ payload: { path: "C:\\notes.md", content: "# Updated Title\nParagraf baru." } });
     });
 
     // Assert: error banner hilang dan markdown baru ter-render
@@ -211,5 +231,140 @@ describe("NotesPanel Component", () => {
 
     expect(unlistenUpdateMock).toHaveBeenCalled();
     expect(unlistenErrorMock).toHaveBeenCalled();
+  });
+
+  it("11. switching tabs updates active document and invokes setActiveNotesFile", async () => {
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Content Doc 1" },
+          { path: "/notes/doc2.md", title: "doc2.md", content: "# Content Doc 2" },
+        ],
+        activePath: "/notes/doc1.md",
+        content: "# Content Doc 1",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Content Doc 1" })).toBeInTheDocument();
+
+    // Tab bar harus memiliki 2 tab
+    const tab1 = screen.getByRole("tab", { name: /doc1.md/i });
+    const tab2 = screen.getByRole("tab", { name: /doc2.md/i });
+    expect(tab1).toHaveAttribute("aria-selected", "true");
+    expect(tab2).toHaveAttribute("aria-selected", "false");
+
+    // Klik tab kedua
+    fireEvent.click(tab2);
+
+    expect(commands.setActiveNotesFile).toHaveBeenCalledWith("/notes/doc2.md");
+    expect(tab2).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { level: 1, name: "Content Doc 2" })).toBeInTheDocument();
+  });
+
+  it("12. closing active tab invokes closeNotesFile and switches active to sibling tab", async () => {
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Content Doc 1" },
+          { path: "/notes/doc2.md", title: "doc2.md", content: "# Content Doc 2" },
+        ],
+        activePath: "/notes/doc1.md",
+        content: "# Content Doc 1",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Content Doc 1" })).toBeInTheDocument();
+
+    // Tutup tab pertama (yang sedang aktif)
+    const closeTab1Btn = screen.getByRole("button", { name: "Tutup tab doc1.md" });
+    fireEvent.click(closeTab1Btn);
+
+    expect(commands.closeNotesFile).toHaveBeenCalledWith("/notes/doc1.md");
+
+    // doc2.md menjadi tab aktif yang baru
+    await waitFor(() => {
+      expect(screen.queryByRole("tab", { name: /doc1.md/i })).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("tab", { name: /doc2.md/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { level: 1, name: "Content Doc 2" })).toBeInTheDocument();
+  });
+
+  it("13. picking a new file adds tab to document list and activates it", async () => {
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [{ path: "/notes/doc1.md", title: "doc1.md", content: "# Doc 1" }],
+        activePath: "/notes/doc1.md",
+        content: "# Doc 1",
+        error: null,
+      },
+    });
+
+    vi.spyOn(commands, "pickNotesFile").mockResolvedValue({
+      status: "ok",
+      data: { path: "/notes/doc3.md", title: "doc3.md", content: "# Doc 3 Newly Added" },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("tab", { name: /doc1.md/i })).toBeInTheDocument();
+
+    // Klik tombol '+' pada tab bar
+    const newTabBtn = screen.getByRole("button", { name: "Buka dokumen baru" });
+    fireEvent.click(newTabBtn);
+
+    await waitFor(() => {
+      expect(commands.pickNotesFile).toHaveBeenCalledTimes(1);
+    });
+
+    // Tab baru doc3.md muncul dan aktif
+    expect(await screen.findByRole("tab", { name: /doc3.md/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { level: 1, name: "Doc 3 Newly Added" })).toBeInTheDocument();
+  });
+
+  it("14. background notesUpdate for non-active tab updates its cached content without switching active tab", async () => {
+    let updateCallback: ((event: { payload: { path: string; content: string } }) => void) | null = null;
+    vi.spyOn(events.notesUpdate, "listen").mockImplementation(async (cb) => {
+      updateCallback = cb as unknown as (event: { payload: { path: string; content: string } }) => void;
+      return vi.fn();
+    });
+
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Doc 1 Original" },
+          { path: "/notes/doc2.md", title: "doc2.md", content: "# Doc 2 Original" },
+        ],
+        activePath: "/notes/doc1.md",
+        content: "# Doc 1 Original",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 1 Original" })).toBeInTheDocument();
+
+    // Trigger update untuk doc2.md (yang sedang di background)
+    act(() => {
+      updateCallback!({
+        payload: { path: "/notes/doc2.md", content: "# Doc 2 Modified in Background" },
+      });
+    });
+
+    // Tab aktif tetap doc1.md
+    expect(screen.getByRole("heading", { level: 1, name: "Doc 1 Original" })).toBeInTheDocument();
+
+    // Sekarang beralih ke doc2.md
+    const tab2 = screen.getByRole("tab", { name: /doc2.md/i });
+    fireEvent.click(tab2);
+
+    // Konten yang ter-render adalah konten yang sudah di-update di background
+    expect(screen.getByRole("heading", { level: 1, name: "Doc 2 Modified in Background" })).toBeInTheDocument();
   });
 });

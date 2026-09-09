@@ -15,8 +15,8 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_specta::{collect_commands, collect_events, Builder};
 use windows_sys::Win32::Foundation::{HWND, LPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, SetWindowDisplayAffinity, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE,
-    SWP_NOZORDER,
+    EnumChildWindows, IsWindow, SetWindowDisplayAffinity, SetWindowPos, SWP_ASYNCWINDOWPOS,
+    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
 };
 
 const WDA_EXCLUDEFROMCAPTURE: u32 = 0x00000011;
@@ -56,6 +56,7 @@ pub struct RecordingEndedPayload {
 #[serde(rename_all = "camelCase")]
 #[tauri_specta(event_name = "notes:update")]
 pub struct NotesUpdatePayload {
+    pub path: String,
     pub content: String,
 }
 
@@ -119,9 +120,13 @@ pub struct OverlayState {
     pub is_recording: bool,
     pub recording_start_instant: Option<std::time::Instant>,
     pub notes_watcher: Option<notify::RecommendedWatcher>,
+    pub watched_directories: std::collections::HashSet<PathBuf>,
+    pub opened_notes: std::collections::HashMap<String, String>,
+    pub active_notes_path: Option<String>,
     pub last_notes_content: Option<String>,
     pub last_notes_error: Option<String>,
     pub qa_generation: u64,
+    pub active_dialog_hwnd: Option<isize>,
 }
 
 impl OverlayState {
@@ -143,9 +148,13 @@ impl Default for OverlayState {
             is_recording: false,
             recording_start_instant: None,
             notes_watcher: None,
+            watched_directories: std::collections::HashSet::new(),
+            opened_notes: std::collections::HashMap::new(),
+            active_notes_path: None,
             last_notes_content: None,
             last_notes_error: None,
             qa_generation: 0,
+            active_dialog_hwnd: None,
         }
     }
 }
@@ -580,9 +589,20 @@ pub fn toggle_overlay_visibility(app: &tauri::AppHandle) {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if state_guard.hwnd == 0 {
-            return;
+        // Proteksi modal dialog: Jika native modal file dialog sedang aktif di layar,
+        // abaikan shortcut F9 agar tidak terjadi deadlock input queue Win32.
+        if let Some(dlg_hwnd_val) = state_guard.active_dialog_hwnd {
+            let dlg_hwnd = dlg_hwnd_val as HWND;
+            // SAFETY: IsWindow hanya memvalidasi apakah handle window masih aktif di OS.
+            let is_alive = unsafe { IsWindow(dlg_hwnd) != 0 };
+            if is_alive {
+                println!("[HOTKEY] F9 diabaikan demi keamanan karena modal dialog sedang aktif.");
+                return;
+            } else {
+                state_guard.active_dialog_hwnd = None;
+            }
         }
+
         let hwnd = state_guard.hwnd;
         let is_concealed = state_guard.is_concealed;
         state_guard.is_concealed = !is_concealed;
@@ -614,7 +634,7 @@ pub fn toggle_overlay_visibility(app: &tauri::AppHandle) {
                 pos_to_restore.y,
                 0,
                 0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
             );
         }
         // Re-apply stealth saat kembali ke Normal state
@@ -634,7 +654,7 @@ pub fn toggle_overlay_visibility(app: &tauri::AppHandle) {
                 -9999,
                 0,
                 0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
             );
         }
         println!("[VISIBILITY] Concealed: dipindahkan ke (-9999, -9999)");
@@ -724,10 +744,119 @@ pub fn process_notes_file_load(
 
 /// Membaca file notes, memancarkan event `notes:update`, menyimpan path ke config (write-through),
 /// dan memulai pemantauan file melalui parent directory watcher non-rekursif.
+/// Mendaftarkan parent directory ke file watcher jika belum pernah dipantau.
+pub fn setup_or_add_watcher(app: &tauri::AppHandle, parent_dir: PathBuf) -> Result<(), String> {
+    use notify::Watcher;
+
+    let state = app.state::<Mutex<OverlayState>>();
+    let mut state_guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    if state_guard.watched_directories.contains(&parent_dir) {
+        return Ok(());
+    }
+
+    if state_guard.notes_watcher.is_none() {
+        let app_handle = app.clone();
+        let watcher = notify::recommended_watcher(
+            move |res: Result<notify::Event, notify::Error>| match res {
+                Ok(event) => {
+                    let state = app_handle.state::<Mutex<OverlayState>>();
+                    let (opened_paths, active_path) = {
+                        let guard = match state.lock() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        let paths: Vec<String> = guard.opened_notes.keys().cloned().collect();
+                        (paths, guard.active_notes_path.clone())
+                    };
+
+                    for path_str in opened_paths {
+                        let target_path = PathBuf::from(&path_str);
+                        if is_target_file_event(&event.paths, &target_path) {
+                            if target_path.exists() {
+                                match fs::read_to_string(&target_path) {
+                                    Ok(new_content) => {
+                                        println!(
+                                            "[WATCHER] File notes di-update: {}",
+                                            target_path.display()
+                                        );
+                                        {
+                                            let mut guard = match state.lock() {
+                                                Ok(g) => g,
+                                                Err(p) => p.into_inner(),
+                                            };
+                                            guard
+                                                .opened_notes
+                                                .insert(path_str.clone(), new_content.clone());
+                                            if active_path.as_deref() == Some(&path_str) {
+                                                guard.last_notes_content =
+                                                    Some(new_content.clone());
+                                            }
+                                            guard.last_notes_error = None;
+                                        }
+                                        let _ = app_handle.emit(
+                                            "notes:update",
+                                            NotesUpdatePayload {
+                                                path: path_str.clone(),
+                                                content: new_content,
+                                            },
+                                        );
+                                    }
+                                    Err(err) => {
+                                        let msg = format!(
+                                            "Gagal membaca ulang file notes '{}': {}",
+                                            target_path.display(),
+                                            err
+                                        );
+                                        trigger_notes_error(&app_handle, &msg);
+                                    }
+                                }
+                            } else {
+                                let msg = format!(
+                                    "File notes '{}' telah dihapus atau dipindahkan.",
+                                    target_path.display()
+                                );
+                                trigger_notes_error(&app_handle, &msg);
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    let msg = format!("Terjadi kesalahan pada file watcher: {}", err);
+                    trigger_notes_error(&app_handle, &msg);
+                }
+            },
+        )
+        .map_err(|err| format!("Gagal menginisialisasi file watcher: {}", err))?;
+
+        state_guard.notes_watcher = Some(watcher);
+    }
+
+    if let Some(ref mut watcher) = state_guard.notes_watcher {
+        watcher
+            .watch(&parent_dir, notify::RecursiveMode::NonRecursive)
+            .map_err(|err| {
+                format!(
+                    "Gagal memantau direktori '{}': {}",
+                    parent_dir.display(),
+                    err
+                )
+            })?;
+        state_guard.watched_directories.insert(parent_dir);
+    }
+
+    Ok(())
+}
+
+/// Membaca file notes, memancarkan event `notes:update`, menyimpan path ke config (write-through),
+/// memperbarui in-memory OverlayState (opened_notes), dan memulai pemantauan file.
 pub fn start_watching_notes_file(
     app: &tauri::AppHandle,
     notes_path: PathBuf,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let app_data_dir = match app.path().app_data_dir() {
         Ok(dir) => dir,
         Err(err) => {
@@ -737,147 +866,195 @@ pub fn start_watching_notes_file(
         }
     };
 
-    // 1 & 2. Baca isi file notes + write-through ke config.json di disk
-    let (content, updated_config) = match process_notes_file_load(&notes_path, &app_data_dir) {
-        Ok(res) => res,
-        Err(err_msg) => {
-            trigger_notes_error(app, &err_msg);
-            return Err(err_msg);
-        }
-    };
+    let content = fs::read_to_string(&notes_path).map_err(|err| {
+        let msg = format!(
+            "Gagal membaca file notes '{}': {}",
+            notes_path.display(),
+            err
+        );
+        trigger_notes_error(app, &msg);
+        msg
+    })?;
 
-    // 3. Emit notes:update { content }
-    let _ = app.emit(
-        "notes:update",
-        NotesUpdatePayload {
-            content: content.clone(),
-        },
-    );
+    let path_str = notes_path.to_string_lossy().to_string();
 
-    // 4. Update in-memory OverlayState
-    let state = app.state::<Mutex<OverlayState>>();
+    // 1. Update in-memory state & persistensi write-through ke config.json
     {
+        let state = app.state::<Mutex<OverlayState>>();
         let mut state_guard = match state.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        state_guard.config = Some(updated_config);
-        state_guard.last_notes_content = Some(content);
+
+        let mut opened_paths = state_guard
+            .config
+            .as_ref()
+            .map(|c| c.get_effective_opened_notes_paths())
+            .unwrap_or_default();
+
+        if !opened_paths.contains(&path_str) {
+            opened_paths.push(path_str.clone());
+        }
+
+        let active_path = Some(path_str.clone());
+        let updated_cfg =
+            config::update_config_notes_tabs(&app_data_dir, opened_paths, active_path)?;
+
+        state_guard.config = Some(updated_cfg);
+        state_guard
+            .opened_notes
+            .insert(path_str.clone(), content.clone());
+        state_guard.active_notes_path = Some(path_str.clone());
+        state_guard.last_notes_content = Some(content.clone());
         state_guard.last_notes_error = None;
     }
 
-    // 5. Inisialisasi watcher pada parent directory
+    // 2. Emit notes:update { path, content }
+    let _ = app.emit(
+        "notes:update",
+        NotesUpdatePayload {
+            path: path_str.clone(),
+            content: content.clone(),
+        },
+    );
+
+    // 3. Daftarkan parent directory ke watcher
     let parent_dir = notes_path
         .parent()
         .ok_or_else(|| "Parent directory tidak valid untuk file notes".to_string())?
         .to_path_buf();
 
-    let app_handle_for_watcher = app.clone();
-    let target_file_for_watcher = notes_path.clone();
-
-    use notify::Watcher;
-
-    let mut watcher =
-        notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| match res {
-            Ok(event) => {
-                if is_target_file_event(&event.paths, &target_file_for_watcher) {
-                    if target_file_for_watcher.exists() {
-                        match fs::read_to_string(&target_file_for_watcher) {
-                            Ok(new_content) => {
-                                println!(
-                                    "[WATCHER] File notes di-update: {}",
-                                    target_file_for_watcher.display()
-                                );
-                                let state = app_handle_for_watcher.state::<Mutex<OverlayState>>();
-                                {
-                                    let mut state_guard = match state.lock() {
-                                        Ok(guard) => guard,
-                                        Err(poisoned) => poisoned.into_inner(),
-                                    };
-                                    state_guard.last_notes_content = Some(new_content.clone());
-                                    state_guard.last_notes_error = None;
-                                }
-                                let _ = app_handle_for_watcher.emit(
-                                    "notes:update",
-                                    NotesUpdatePayload {
-                                        content: new_content,
-                                    },
-                                );
-                            }
-                            Err(err) => {
-                                let msg = format!(
-                                    "Gagal membaca ulang file notes '{}': {}",
-                                    target_file_for_watcher.display(),
-                                    err
-                                );
-                                trigger_notes_error(&app_handle_for_watcher, &msg);
-                            }
-                        }
-                    } else {
-                        let msg = format!(
-                            "File notes '{}' telah dihapus atau dipindahkan.",
-                            target_file_for_watcher.display()
-                        );
-                        trigger_notes_error(&app_handle_for_watcher, &msg);
-                    }
-                }
-            }
-            Err(err) => {
-                let msg = format!("Terjadi kesalahan pada file watcher: {}", err);
-                trigger_notes_error(&app_handle_for_watcher, &msg);
-            }
-        })
-        .map_err(|err| format!("Gagal menginisialisasi file watcher: {}", err))?;
-
-    watcher
-        .watch(&parent_dir, notify::RecursiveMode::NonRecursive)
-        .map_err(|err| {
-            format!(
-                "Gagal memantau direktori '{}': {}",
-                parent_dir.display(),
-                err
-            )
-        })?;
-
-    // Simpan watcher ke OverlayState (secara otomatis men-drop watcher lama jika ada via RAII)
-    {
-        let mut state_guard = match state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        state_guard.notes_watcher = Some(watcher);
-    }
+    setup_or_add_watcher(app, parent_dir)?;
 
     println!(
         "[WATCHER] Memulai pemantauan file notes: {}",
         notes_path.display()
     );
-    Ok(())
+
+    Ok(content)
 }
 
-/// Menangani auto-restore file notes saat startup aplikasi.
-pub fn handle_startup_notes_restore(app: &tauri::AppHandle, config: Option<&Config>) {
-    let notes_path_str = match config.and_then(|c| c.last_opened_notes_path.as_deref()) {
-        Some(path) => path,
-        None => {
-            // Skenario 1: lastOpenedNotesPath == null (belum pernah pilih file) -> no-op
-            return;
+/// Menutup tab dokumen notes tertentu dan memperbarui state serta config.json.
+pub fn close_notes_file_core(
+    app: &tauri::AppHandle,
+    path_to_close: &str,
+) -> Result<Config, String> {
+    let app_data_dir = match app.path().app_data_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            return Err(format!("Gagal mengakses direktori data aplikasi: {}", err));
         }
     };
 
-    let notes_path = PathBuf::from(notes_path_str);
-    if notes_path.exists() {
-        // Skenario 2: file valid & ada -> start_watching_notes_file
-        if let Err(err) = start_watching_notes_file(app, notes_path) {
-            eprintln!("[NOTES RESTORE ERROR] {}", err);
-        }
+    let state = app.state::<Mutex<OverlayState>>();
+    let mut state_guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    state_guard.opened_notes.remove(path_to_close);
+
+    let mut opened_paths = state_guard
+        .config
+        .as_ref()
+        .map(|c| c.get_effective_opened_notes_paths())
+        .unwrap_or_default();
+
+    opened_paths.retain(|p| p != path_to_close);
+
+    let new_active = if state_guard.active_notes_path.as_deref() == Some(path_to_close) {
+        opened_paths.last().cloned()
     } else {
-        // Skenario 3: file hilang / dipindah -> trigger_notes_error
-        let msg = format!(
-            "File notes sebelumnya '{}' tidak ditemukan atau telah dipindahkan.",
-            notes_path_str
-        );
-        trigger_notes_error(app, &msg);
+        state_guard.active_notes_path.clone()
+    };
+
+    state_guard.active_notes_path = new_active.clone();
+    state_guard.last_notes_content = new_active
+        .as_ref()
+        .and_then(|p| state_guard.opened_notes.get(p).cloned());
+
+    let updated_config = config::update_config_notes_tabs(&app_data_dir, opened_paths, new_active)?;
+    state_guard.config = Some(updated_config.clone());
+
+    Ok(updated_config)
+}
+
+/// Mengubah tab dokumen aktif dan memperbarui state serta config.json.
+pub fn set_active_notes_file_core(
+    app: &tauri::AppHandle,
+    active_path: &str,
+) -> Result<Config, String> {
+    let app_data_dir = match app.path().app_data_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            return Err(format!("Gagal mengakses direktori data aplikasi: {}", err));
+        }
+    };
+
+    let state = app.state::<Mutex<OverlayState>>();
+    let mut state_guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    state_guard.active_notes_path = Some(active_path.to_string());
+    state_guard.last_notes_content = state_guard.opened_notes.get(active_path).cloned();
+
+    let opened_paths = state_guard
+        .config
+        .as_ref()
+        .map(|c| c.get_effective_opened_notes_paths())
+        .unwrap_or_default();
+
+    let updated_config = config::update_config_notes_tabs(
+        &app_data_dir,
+        opened_paths,
+        Some(active_path.to_string()),
+    )?;
+    state_guard.config = Some(updated_config.clone());
+
+    Ok(updated_config)
+}
+
+/// Menangani auto-restore seluruh tab dokumen notes saat startup aplikasi.
+pub fn handle_startup_notes_restore(app: &tauri::AppHandle, config: Option<&Config>) {
+    let cfg = match config {
+        Some(c) => c,
+        None => return,
+    };
+
+    let paths = cfg.get_effective_opened_notes_paths();
+    if paths.is_empty() {
+        return;
+    }
+
+    let active_path = cfg.get_effective_active_notes_path();
+
+    for path_str in paths {
+        let notes_path = PathBuf::from(&path_str);
+        if notes_path.exists() {
+            if let Err(err) = start_watching_notes_file(app, notes_path) {
+                eprintln!("[NOTES RESTORE ERROR] {}", err);
+            }
+        } else {
+            let msg = format!(
+                "File notes sebelumnya '{}' tidak ditemukan atau telah dipindahkan.",
+                path_str
+            );
+            trigger_notes_error(app, &msg);
+        }
+    }
+
+    if let Some(active) = active_path {
+        let state = app.state::<Mutex<OverlayState>>();
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state_guard.active_notes_path = Some(active.clone());
+        if let Some(content) = state_guard.opened_notes.get(&active) {
+            state_guard.last_notes_content = Some(content.clone());
+        }
     }
 }
 
@@ -890,6 +1067,8 @@ pub fn run() {
             commands::get_app_state,
             commands::get_notes_state,
             commands::pick_notes_file,
+            commands::set_active_notes_file,
+            commands::close_notes_file,
             commands::send_audio_blob,
             commands::test_trigger_hotkey
         ])
@@ -910,6 +1089,8 @@ pub fn run() {
             commands::get_app_state,
             commands::get_notes_state,
             commands::pick_notes_file,
+            commands::set_active_notes_file,
+            commands::close_notes_file,
             commands::send_audio_blob
         ])
         .events(collect_events![
@@ -1007,6 +1188,8 @@ pub fn run() {
                             groq_api_keys: vec!["mock-groq-key".to_string()],
                             window_bounds: config::WindowBounds::default(),
                             font_size: config::DEFAULT_FONT_SIZE,
+                            opened_notes_paths: Vec::new(),
+                            active_notes_path: None,
                             last_opened_notes_path: None,
                             obsidian_vault_path: None,
                             hotkeys: config::HotkeysConfig::default(),

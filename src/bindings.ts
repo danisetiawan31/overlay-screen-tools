@@ -10,7 +10,11 @@ export const commands = {
 	getNotesState: () => typedError<NotesState, string>(__TAURI_INVOKE("get_notes_state")),
 	pickNotesFile: () => typedError<{
 	path: string,
+	title: string,
+	content: string,
 } | null, string>(__TAURI_INVOKE("pick_notes_file")),
+	setActiveNotesFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("set_active_notes_file", { path })),
+	closeNotesFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("close_notes_file", { path })),
 	sendAudioBlob: (args: SendAudioBlobArgs) => typedError<null, string>(__TAURI_INVOKE("send_audio_blob", { args })),
 	testTriggerHotkey: (args: TestTriggerHotkeyArgs) => typedError<null, string>(__TAURI_INVOKE("test_trigger_hotkey", { args })),
 };
@@ -40,21 +44,32 @@ export type ConfigErrorPayload = {
 	message: string,
 };
 
+export type NoteDocument = {
+	path: string,
+	title: string,
+	content: string,
+};
+
 export type NotesErrorPayload = {
 	message: string,
 };
 
 export type NotesState = {
+	documents: NoteDocument[],
+	activePath: string | null,
 	content: string | null,
 	error: string | null,
 };
 
 export type NotesUpdatePayload = {
+	path: string,
 	content: string,
 };
 
 export type PickNotesFileResponse = {
 	path: string,
+	title: string,
+	content: string,
 };
 
 export type QaErrorPayload = {

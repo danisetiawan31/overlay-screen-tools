@@ -93,11 +93,42 @@ pub struct Config {
     #[serde(default = "default_font_size")]
     pub font_size: u32,
     #[serde(default)]
+    pub opened_notes_paths: Vec<String>,
+    #[serde(default)]
+    pub active_notes_path: Option<String>,
+    #[serde(default)]
     pub last_opened_notes_path: Option<String>,
     #[serde(default)]
     pub obsidian_vault_path: Option<String>,
     #[serde(default)]
     pub hotkeys: HotkeysConfig,
+}
+
+impl Config {
+    /// Mengembalikan daftar path dokumen notes yang perlu dibuka saat startup.
+    /// Jika `opened_notes_paths` tidak kosong, gunakan daftar tersebut.
+    /// Jika kosong tapi `last_opened_notes_path` ada (migrasi backward compatibility),
+    /// gunakan `last_opened_notes_path`.
+    pub fn get_effective_opened_notes_paths(&self) -> Vec<String> {
+        if !self.opened_notes_paths.is_empty() {
+            self.opened_notes_paths.clone()
+        } else if let Some(ref legacy_path) = self.last_opened_notes_path {
+            vec![legacy_path.clone()]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Mengembalikan path dokumen aktif.
+    /// Jika `active_notes_path` Some, kembalikan itu.
+    /// Jika None, fallback ke dokumen pertama dari daftar efektif.
+    pub fn get_effective_active_notes_path(&self) -> Option<String> {
+        if let Some(ref active) = self.active_notes_path {
+            Some(active.clone())
+        } else {
+            self.get_effective_opened_notes_paths().first().cloned()
+        }
+    }
 }
 
 impl Default for Config {
@@ -107,6 +138,8 @@ impl Default for Config {
             groq_api_keys: Vec::new(),
             window_bounds: WindowBounds::default(),
             font_size: DEFAULT_FONT_SIZE,
+            opened_notes_paths: Vec::new(),
+            active_notes_path: None,
             last_opened_notes_path: None,
             obsidian_vault_path: None,
             hotkeys: HotkeysConfig::default(),
@@ -302,7 +335,47 @@ pub fn update_config_last_opened_notes_path(
         Config::default()
     };
 
+    if let Some(ref p) = path {
+        if !config.opened_notes_paths.contains(p) {
+            config.opened_notes_paths.push(p.clone());
+        }
+        config.active_notes_path = Some(p.clone());
+    }
     config.last_opened_notes_path = path;
+    save_config(app_data_dir, &config)?;
+
+    Ok(config)
+}
+
+/// Memperbarui daftar tab dokumen yang terbuka (`opened_notes_paths`) dan tab aktif (`active_notes_path`) di `config.json`.
+pub fn update_config_notes_tabs(
+    app_data_dir: &Path,
+    opened_paths: Vec<String>,
+    active_path: Option<String>,
+) -> Result<Config, String> {
+    let config_path = get_config_path(app_data_dir);
+    let mut config = if config_path.exists() {
+        let raw = fs::read_to_string(&config_path).map_err(|err| {
+            format!(
+                "Gagal membaca file config.json di '{}': {}",
+                config_path.display(),
+                err
+            )
+        })?;
+        let clean = raw.trim_start_matches('\u{feff}').trim();
+        serde_json::from_str::<Config>(clean).map_err(|err| {
+            format!(
+                "Format JSON di config.json tidak valid / malformed: {}",
+                err
+            )
+        })?
+    } else {
+        Config::default()
+    };
+
+    config.opened_notes_paths = opened_paths;
+    config.active_notes_path = active_path.clone();
+    config.last_opened_notes_path = active_path;
     save_config(app_data_dir, &config)?;
 
     Ok(config)
@@ -829,6 +902,72 @@ mod tests {
         assert_eq!(
             parsed_val.obsidian_vault_path,
             Some("D:\\project\\personal-vault".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_config_notes_tabs_persists_to_disk() {
+        let temp_dir = std::env::temp_dir().join("poc_overlay_test_notes_tabs");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let paths = vec![
+            "C:\\notes\\doc1.md".to_string(),
+            "C:\\notes\\doc2.md".to_string(),
+        ];
+        let active = Some("C:\\notes\\doc2.md".to_string());
+
+        let updated = update_config_notes_tabs(&temp_dir, paths.clone(), active.clone()).unwrap();
+        assert_eq!(updated.opened_notes_paths, paths);
+        assert_eq!(updated.active_notes_path, active);
+        assert_eq!(updated.last_opened_notes_path, active);
+
+        let file_path = get_config_path(&temp_dir);
+        let raw = fs::read_to_string(&file_path).unwrap();
+        let from_disk: Config = serde_json::from_str(&raw).unwrap();
+        assert_eq!(from_disk.opened_notes_paths, paths);
+        assert_eq!(from_disk.active_notes_path, active);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_config_multi_notes_tabs_backward_compatibility_fallback() {
+        // Kasus 1: Config lama hanya punya lastOpenedNotesPath
+        let json_legacy = r#"{
+            "openrouterApiKeys": ["sk-or-test"],
+            "groqApiKeys": ["gsk-test"],
+            "lastOpenedNotesPath": "C:\\notes\\legacy.md"
+        }"#;
+        let parsed_legacy: Config = serde_json::from_str(json_legacy).unwrap();
+        assert!(parsed_legacy.opened_notes_paths.is_empty());
+        assert_eq!(
+            parsed_legacy.last_opened_notes_path,
+            Some("C:\\notes\\legacy.md".to_string())
+        );
+        assert_eq!(
+            parsed_legacy.get_effective_opened_notes_paths(),
+            vec!["C:\\notes\\legacy.md".to_string()]
+        );
+        assert_eq!(
+            parsed_legacy.get_effective_active_notes_path(),
+            Some("C:\\notes\\legacy.md".to_string())
+        );
+
+        // Kasus 2: Config baru dengan openedNotesPaths dan activeNotesPath
+        let json_multi = r#"{
+            "openrouterApiKeys": ["sk-or-test"],
+            "groqApiKeys": ["gsk-test"],
+            "openedNotesPaths": ["C:\\notes\\a.md", "C:\\notes\\b.md"],
+            "activeNotesPath": "C:\\notes\\b.md"
+        }"#;
+        let parsed_multi: Config = serde_json::from_str(json_multi).unwrap();
+        assert_eq!(
+            parsed_multi.get_effective_opened_notes_paths(),
+            vec!["C:\\notes\\a.md".to_string(), "C:\\notes\\b.md".to_string()]
+        );
+        assert_eq!(
+            parsed_multi.get_effective_active_notes_path(),
+            Some("C:\\notes\\b.md".to_string())
         );
     }
 }
