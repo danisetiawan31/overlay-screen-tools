@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import mermaid from "mermaid";
+import { Copy, Check } from "lucide-react";
 
 mermaid.initialize({
   startOnLoad: false,
@@ -109,7 +110,89 @@ export function extractTextContent(children: React.ReactNode): string {
   return "";
 }
 
+export const CodeBlockWrapper: React.FC<React.ComponentPropsWithoutRef<"pre">> = ({
+  children,
+  className,
+  ...rest
+}) => {
+  const [copied, setCopied] = useState(false);
+
+  let language = "";
+  let rawCode = "";
+
+  if (React.isValidElement(children)) {
+    const childProps = children.props as { className?: string; children?: React.ReactNode };
+    const match = /language-(\w+)/.exec(childProps.className || "");
+    if (match) {
+      language = match[1];
+    }
+    rawCode = extractTextContent(childProps.children).replace(/\n$/, "");
+  } else {
+    rawCode = extractTextContent(children).replace(/\n$/, "");
+  }
+
+  const handleCopy = async () => {
+    if (!rawCode) return;
+    try {
+      await navigator.clipboard.writeText(rawCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback
+    }
+  };
+
+  return (
+    <div className="my-3 rounded-lg border border-zinc-800/90 bg-zinc-950/95 overflow-hidden shadow-sm">
+      {/* Code Header with language and copy button */}
+      <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border-b border-zinc-800/80 text-[11px] select-none">
+        <span className="font-mono font-medium text-zinc-400 uppercase tracking-wider text-[10px]">
+          {language || "code"}
+        </span>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition text-[11px]"
+          aria-label="Salin kode"
+          title="Salin kode"
+        >
+          {copied ? (
+            <>
+              <Check className="w-3 h-3 text-emerald-400" />
+              <span className="text-emerald-400">Tersalin</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-3 h-3" />
+              <span>Salin</span>
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Code Body */}
+      <pre
+        className={`p-3 overflow-x-auto font-mono text-xs leading-relaxed text-zinc-100 ${className || ""}`}
+        {...rest}
+      >
+        {children}
+      </pre>
+    </div>
+  );
+};
+
 export const markdownComponents = {
+  pre(props: React.ComponentPropsWithoutRef<"pre">) {
+    const { children, ...rest } = props;
+    if (
+      React.isValidElement(children) &&
+      typeof (children.props as { className?: string })?.className === "string" &&
+      (children.props as { className?: string }).className?.includes("language-mermaid")
+    ) {
+      return <>{children}</>;
+    }
+    return <CodeBlockWrapper {...rest}>{children}</CodeBlockWrapper>;
+  },
   code(props: React.ComponentPropsWithoutRef<"code">) {
     const { children, className, ...rest } = props;
     const match = /language-(\w+)/.exec(className || "");
@@ -117,6 +200,19 @@ export const markdownComponents = {
       const chartCode = extractTextContent(children).replace(/\n$/, "");
       return <MermaidRenderer chart={chartCode} />;
     }
+
+    const isInline = !className || !className.includes("language-");
+    if (isInline) {
+      return (
+        <code
+          className={`rounded bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[12px] text-amber-300 border border-zinc-700/50 ${className || ""}`}
+          {...rest}
+        >
+          {children}
+        </code>
+      );
+    }
+
     return (
       <code className={className} {...rest}>
         {children}
@@ -124,3 +220,4 @@ export const markdownComponents = {
     );
   },
 };
+

@@ -71,6 +71,11 @@ describe("QaPanel Component", () => {
       data: null,
     });
 
+    vi.spyOn(commands, "askAiText").mockResolvedValue({
+      status: "ok",
+      data: null,
+    });
+
     mockRecorderInstance = {
       start: vi.fn(() => {
         mockRecorderInstance.state = "recording";
@@ -279,4 +284,70 @@ describe("QaPanel Component", () => {
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+
+  it("10. renders text prompt input and submit button", () => {
+    render(<QaPanel qaAvailable={true} />);
+
+    const input = screen.getByRole("textbox", { name: "Prompt pertanyaan AI" });
+    const submitBtn = screen.getByRole("button", { name: "Kirim pertanyaan" });
+
+    expect(input).toBeInTheDocument();
+    expect(input).toHaveAttribute("placeholder", "Tanya AI atau tahan F8 untuk bicara...");
+    expect(submitBtn).toBeInTheDocument();
+    expect(submitBtn).toBeDisabled(); // Disabled when input is empty
+  });
+
+  it("11. submits text prompt calls commands.askAiText and updates question and status", async () => {
+    render(<QaPanel qaAvailable={true} />);
+
+    const input = screen.getByRole("textbox", { name: "Prompt pertanyaan AI" });
+    fireEvent.change(input, { target: { value: "Jelaskan arsitektur Tauri v2" } });
+
+    const submitBtn = screen.getByRole("button", { name: "Kirim pertanyaan" });
+    expect(submitBtn).not.toBeDisabled();
+
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    expect(commands.askAiText).toHaveBeenCalledTimes(1);
+    expect(commands.askAiText).toHaveBeenCalledWith({ prompt: "Jelaskan arsitektur Tauri v2" });
+    expect(input).toHaveValue("");
+    expect(screen.getByText("Jelaskan arsitektur Tauri v2")).toBeInTheDocument();
+    expect(screen.getByText(/Menghasilkan contekan AI/i)).toBeInTheDocument();
+  });
+
+  it("12. disables input and submit button when status is answering or transcribing", async () => {
+    render(<QaPanel qaAvailable={true} />);
+
+    const input = screen.getByRole("textbox", { name: "Prompt pertanyaan AI" });
+    const submitBtn = screen.getByRole("button", { name: "Kirim pertanyaan" });
+
+    // Simulate transcript arrival which sets status to 'answering'
+    await act(async () => {
+      if (transcriptResultCb) {
+        transcriptResultCb({ payload: { text: "Pertanyaan dari audio..." } });
+      }
+    });
+
+    expect(input).toBeDisabled();
+    expect(submitBtn).toBeDisabled();
+  });
+
+  it("13. prevents submitting empty or whitespace-only prompt", async () => {
+    render(<QaPanel qaAvailable={true} />);
+
+    const input = screen.getByRole("textbox", { name: "Prompt pertanyaan AI" });
+    fireEvent.change(input, { target: { value: "    " } });
+
+    const submitBtn = screen.getByRole("button", { name: "Kirim pertanyaan" });
+    expect(submitBtn).toBeDisabled();
+
+    await act(async () => {
+      fireEvent.submit(submitBtn.closest("form")!);
+    });
+
+    expect(commands.askAiText).not.toHaveBeenCalled();
+  });
 });
+

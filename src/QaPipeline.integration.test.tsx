@@ -237,6 +237,10 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
       await triggerRecordingStarted();
     });
 
+    await waitFor(() => {
+      expect(mockRecorderInstance.start).toHaveBeenCalledTimes(1);
+    });
+
     const fakeChunk1 = new Blob(["audio-req-1"], { type: "audio/webm" });
     if (mockRecorderInstance.ondataavailable) {
       mockRecorderInstance.ondataavailable({ data: fakeChunk1 });
@@ -290,7 +294,9 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
       await triggerRecordingStarted();
     });
 
-    expect(mockRecorderInstance.start).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(mockRecorderInstance.start).toHaveBeenCalledTimes(1);
+    });
 
     // Quick release F8 (<400ms)
     await act(async () => {

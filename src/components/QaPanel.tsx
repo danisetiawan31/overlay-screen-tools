@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { Mic, MicOff, AlertCircle, MessageSquare, Sparkles, Radio } from "lucide-react";
+import { Mic, MicOff, AlertCircle, MessageSquare, Sparkles, Radio, SendHorizontal } from "lucide-react";
 import { commands, events } from "../bindings";
 import { markdownComponents } from "./MermaidRenderer";
 
@@ -27,11 +27,50 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
     status: "idle",
     error: null,
   });
+  const [promptInput, setPromptInput] = useState("");
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const isRecordingRef = useRef<boolean>(false);
+
+  const isProcessing =
+    qaState.status === "recording" ||
+    qaState.status === "transcribing" ||
+    qaState.status === "answering";
+
+  const handleSubmitPrompt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = promptInput.trim();
+    if (!trimmed || isProcessing) return;
+
+    setPromptInput("");
+    setQaState((prev) => ({
+      ...prev,
+      question: trimmed,
+      answer: null,
+      status: "answering",
+      error: null,
+    }));
+
+    try {
+      const res = await commands.askAiText({ prompt: trimmed });
+      if (res.status === "error") {
+        setQaState((prev) => ({
+          ...prev,
+          status: "error",
+          error: res.error,
+        }));
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setQaState((prev) => ({
+        ...prev,
+        status: "error",
+        error: `Gagal mengirim pertanyaan: ${msg}`,
+      }));
+    }
+  };
 
   // 1. Registrasi event listeners untuk alur Live Q&A
   useEffect(() => {
@@ -336,7 +375,7 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
             </p>
           ) : (
             <p className="text-zinc-600 text-xs italic">
-              Belum ada pertanyaan aktif. Tahan tombol F8 dan ucapkan pertanyaan viewer.
+              Belum ada pertanyaan aktif. Ketik pertanyaan di bawah atau tahan tombol F8 untuk bicara.
             </p>
           )}
         </div>
@@ -348,7 +387,7 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
             <span>Jawaban AI</span>
           </div>
           {qaState.answer ? (
-            <div className="markdown-body prose prose-invert max-w-none text-zinc-100 leading-relaxed text-sm">
+            <div className="markdown-body prose prose-invert max-w-none text-zinc-200 leading-relaxed text-sm break-words space-y-2 [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-zinc-100 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-zinc-100 [&_h3]:text-xs [&_h3]:font-medium [&_h3]:text-zinc-200 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_table]:border-collapse [&_th]:border [&_th]:border-zinc-800 [&_th]:p-1.5 [&_td]:border [&_td]:border-zinc-800 [&_td]:p-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-purple-500 [&_blockquote]:pl-3 [&_blockquote]:text-zinc-400 [&_blockquote]:italic [&_p]:my-1.5">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeHighlight]}
@@ -369,6 +408,33 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
           )}
         </div>
       </div>
+
+      {/* Text Prompt Input Bar (Opsi 1 Single-line) */}
+      <form
+        onSubmit={handleSubmitPrompt}
+        className="shrink-0 flex items-center gap-2 pt-1 border-t border-zinc-800/60"
+      >
+        <div className="relative flex-1">
+          <input
+            type="text"
+            value={promptInput}
+            onChange={(e) => setPromptInput(e.target.value)}
+            placeholder="Tanya AI atau tahan F8 untuk bicara..."
+            disabled={isProcessing}
+            className="w-full bg-zinc-900/80 border border-zinc-700/70 focus:border-purple-500/80 focus:ring-1 focus:ring-purple-500/50 rounded-md px-3 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-500 outline-none transition disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Prompt pertanyaan AI"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={isProcessing || !promptInput.trim()}
+          className="inline-flex items-center justify-center p-1.5 rounded-md bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white disabled:opacity-40 disabled:hover:bg-purple-600 disabled:cursor-not-allowed transition shrink-0"
+          aria-label="Kirim pertanyaan"
+          title="Kirim (Enter)"
+        >
+          <SendHorizontal className="w-3.5 h-3.5" />
+        </button>
+      </form>
     </div>
   );
 };

@@ -13,6 +13,7 @@ Konvensi (dari AGENTS.md §10): command `snake_case`, event pola `domain:action`
 | `update_font_size` | `{ size: number }` | `Result<(), string>` | User klik tombol +/− font size (validasi range: 10–32 px, default: 14 px) |
 | `pick_notes_file` | — | `Result<{ path: string } \| null, string>` (`null` = user cancel dialog) | User klik tombol pilih file di tab Notes |
 | `send_audio_blob` | `{ bytes: number[] }` | `Result<(), string>` | Setelah F8 dilepas, kalau `qa:recording-ended.belowThreshold == false` |
+| `ask_ai_text` | `{ prompt: string }` | `Result<(), string>` | User menekan Enter atau klik tombol Kirim pada input teks Live Q&A |
 
 **Catatan `get_app_state`**: `qaAvailable` ditentukan sekali saat `setup()` Rust (berhasil/gagal registrasi F8 lewat `tauri-plugin-global-shortcut`) — nilainya stabil sepanjang sesi app berjalan, tidak berubah setelah startup. Kalau `false`, frontend menonaktifkan tab Q&A secara permanen untuk sesi itu (graceful degradation, lihat TDD §4).
 
@@ -26,14 +27,14 @@ Semua command mengembalikan tipe `Result<T, String>` di Rust agar frontend memil
 | `notes:error` | `{ message: string }` | File watcher atau pembacaan file notes gagal (file terhapus, dipindah, atau permission berubah). Dikirim BERSAMAAN dengan tray notification native agar frontend menampilkan banner peringatan persisten di tab Notes |
 | `qa:recording-started` | — | F8 di-tekan (`ShortcutState::Pressed`) — frontend mulai `MediaRecorder`, auto-switch ke tab Q&A |
 | `qa:recording-ended` | `{ belowThreshold: boolean }` | F8 dilepas (`ShortcutState::Released`). `belowThreshold: true` kalau durasi tahan < 300–500ms (frontend diam-diam buang recording, tidak kirim apa-apa); `false` kalau valid (frontend stop `MediaRecorder`, kirim blob lewat `send_audio_blob`) |
-| `transcript:result` | `{ text: string }` | STT (Groq) berhasil |
+| `transcript:result` | `{ text: string }` | STT (Groq) berhasil, ATAU input teks prompt (`ask_ai_text`) baru saja diterima |
 | `answer:result` | `{ text: string }` | AI (OpenRouter) berhasil |
 | `qa:error` | `{ stage: "stt" \| "ai", message: string }` | STT atau AI gagal |
 | `config:error` | `{ message: string }` | `config.json` tidak ada/kosong/malformed saat startup — dikirim bersamaan dengan tray notification native (§7 TDD), bukan pengganti |
 
-**Catatan ordering (Q&A)**: kalau F8 ditekan lagi sebelum `transcript:result`/`answer:result`/`qa:error` dari request sebelumnya sempat di-emit, core WAJIB membuang hasil request lama begitu request baru mulai — frontend dijamin cuma pernah terima event dari request TERBARU. Frontend tidak perlu logic pembeda "request mana ini" — overwrite state apa adanya tiap event masuk (lihat TDD §5, state Q&A adalah single object).
+**Catatan ordering (Q&A)**: kalau F8 ditekan lagi atau input teks baru dikirim sebelum `transcript:result`/`answer:result`/`qa:error` dari request sebelumnya sempat di-emit, core WAJIB membuang hasil request lama begitu request baru mulai — frontend dijamin cuma pernah terima event dari request TERBARU. Frontend tidak perlu logic pembeda "request mana ini" — overwrite state apa adanya tiap event masuk (lihat TDD §5, state Q&A adalah single object).
 
-Mekanisme: tiap Q&A request dapet nomor generasi (counter incrementing) di core saat F8 ditekan. Sebelum emit `transcript:result`/`answer:result`/`qa:error` manapun, core cek generasi request itu masih generasi TERKINI — kalau bukan (udah kesusul F8 baru), event dibuang di core, TIDAK di-emit sama sekali (bukan di-emit lalu diabaikan frontend).
+Mekanisme: tiap Q&A request dapet nomor generasi (counter incrementing) di core saat F8 ditekan atau `ask_ai_text` dipanggil. Sebelum emit `transcript:result`/`answer:result`/`qa:error` manapun, core cek generasi request itu masih generasi TERKINI — kalau bukan (udah kesusul request baru), event dibuang di core, TIDAK di-emit sama sekali (bukan di-emit lalu diabaikan frontend).
 
 ## 3. Bentuk Data (payload shapes)
 
@@ -60,6 +61,11 @@ struct PickNotesFileResponse {
 #[derive(serde::Deserialize, specta::Type)]
 struct SendAudioBlobArgs {
     bytes: Vec<u8>,
+}
+
+#[derive(serde::Deserialize, specta::Type)]
+struct AskAiTextArgs {
+    prompt: String,
 }
 
 #[derive(serde::Serialize, specta::Type)]

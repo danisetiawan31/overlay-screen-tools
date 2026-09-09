@@ -16,6 +16,7 @@ export const commands = {
 	setActiveNotesFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("set_active_notes_file", { path })),
 	closeNotesFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("close_notes_file", { path })),
 	sendAudioBlob: (args: SendAudioBlobArgs) => typedError<null, string>(__TAURI_INVOKE("send_audio_blob", { args })),
+	askAiText: (args: AskAiTextArgs) => typedError<null, string>(__TAURI_INVOKE("ask_ai_text", { args })),
 	testTriggerHotkey: (args: TestTriggerHotkeyArgs) => typedError<null, string>(__TAURI_INVOKE("test_trigger_hotkey", { args })),
 };
 
@@ -38,6 +39,10 @@ export type AnswerResultPayload = {
 export type AppState = {
 	fontSize: number,
 	qaAvailable: boolean,
+};
+
+export type AskAiTextArgs = {
+	prompt: string,
 };
 
 export type ConfigErrorPayload = {

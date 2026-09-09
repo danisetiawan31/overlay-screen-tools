@@ -15,8 +15,9 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_specta::{collect_commands, collect_events, Builder};
 use windows_sys::Win32::Foundation::{HWND, LPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, IsWindow, SetWindowDisplayAffinity, SetWindowPos, SWP_ASYNCWINDOWPOS,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+    CreateWindowExW, EnumChildWindows, GetWindowLongPtrW, IsWindow, SetWindowDisplayAffinity,
+    SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
 
 const WDA_EXCLUDEFROMCAPTURE: u32 = 0x00000011;
@@ -97,6 +98,39 @@ unsafe extern "system" fn enum_child_proc(hwnd: HWND, _lparam: LPARAM) -> i32 {
     1
 }
 
+const GWLP_HWNDPARENT: i32 = -8;
+static DUMMY_OWNER_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+fn get_or_create_dummy_owner() -> HWND {
+    let current = DUMMY_OWNER_HWND.load(std::sync::atomic::Ordering::SeqCst);
+    if current != 0 {
+        return current as HWND;
+    }
+
+    // SAFETY: STATIC window class valid bawaan Windows Win32 API, dibuat tersembunyi sebagai owner HWND.
+    unsafe {
+        let class_name: [u16; 7] = [
+            'S' as u16, 'T' as u16, 'A' as u16, 'T' as u16, 'I' as u16, 'C' as u16, 0,
+        ];
+        let dummy = CreateWindowExW(
+            0,
+            class_name.as_ptr(),
+            std::ptr::null(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0 as HWND,
+            0 as _,
+            0 as _,
+            std::ptr::null(),
+        );
+        DUMMY_OWNER_HWND.store(dummy as isize, std::sync::atomic::Ordering::SeqCst);
+        dummy
+    }
+}
+
 fn apply_stealth(hwnd_val: isize) {
     let hwnd = hwnd_val as HWND;
     // SAFETY: HWND valid didapatkan dari WebViewWindow aktif di Tauri.
@@ -108,6 +142,31 @@ fn apply_stealth(hwnd_val: isize) {
         );
         EnumChildWindows(hwnd, Some(enum_child_proc), 0);
         println!("[STEALTH] Applied WDA_EXCLUDEFROMCAPTURE to all child WebViews");
+
+        // Jadikan dummy hidden window sebagai owner agar tersembunyi dari Alt+Tab
+        // tanpa memakai WS_EX_TOOLWINDOW (yang membuat tombol 'X' dan titlebar mengecil)
+        let dummy = get_or_create_dummy_owner();
+        if dummy != (0 as HWND) {
+            SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, dummy as isize);
+        }
+
+        // Hapus WS_EX_TOOLWINDOW (mengembalikan ukuran tombol X dan titlebar normal)
+        // dan hapus WS_EX_APPWINDOW (memastikan tidak muncul di taskbar atau Alt+Tab)
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let target_ex_style = ex_style & !(WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize);
+        if ex_style != target_ex_style {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, target_ex_style);
+            SetWindowPos(
+                hwnd,
+                0 as _,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+            );
+            println!("[STEALTH] Restored normal caption/close button while hidden from Alt+Tab via owner window");
+        }
     }
 }
 
@@ -1070,6 +1129,7 @@ pub fn run() {
             commands::set_active_notes_file,
             commands::close_notes_file,
             commands::send_audio_blob,
+            commands::ask_ai_text,
             commands::test_trigger_hotkey
         ])
         .events(collect_events![
@@ -1091,7 +1151,8 @@ pub fn run() {
             commands::pick_notes_file,
             commands::set_active_notes_file,
             commands::close_notes_file,
-            commands::send_audio_blob
+            commands::send_audio_blob,
+            commands::ask_ai_text
         ])
         .events(collect_events![
             ConfigErrorPayload,
@@ -2144,3 +2205,5 @@ mod tests {
         std::env::remove_var("OPENROUTER_API_URL");
     }
 }
+
+

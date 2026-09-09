@@ -1,8 +1,15 @@
 @import "tailwindcss";
+@import "highlight.js/styles/github-dark.css";
 
 @layer base {
   body {
     user-select: none;
     -webkit-user-select: none;
   }
+
+  /* Override hljs background to blend seamlessly with our custom code container */
+  .hljs {
+    background: transparent !important;
+  }
 }
+

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import React from "react";
 import mermaid from "mermaid";
 import { MermaidRenderer, extractTextContent, markdownComponents } from "./MermaidRenderer";
@@ -110,4 +110,44 @@ describe("MermaidRenderer Component", () => {
     expect(codeEl.tagName).toBe("CODE");
     expect(codeEl).toHaveClass("language-typescript");
   });
+
+  it("7. markdownComponents.pre wraps code block with language label and copy button", async () => {
+    const PreComp = markdownComponents.pre;
+    const writeTextSpy = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText: writeTextSpy } });
+
+    render(
+      React.createElement(
+        PreComp,
+        {},
+        React.createElement("code", { className: "language-rust" }, 'println!("Hello!");')
+      )
+    );
+
+    expect(screen.getByText("rust")).toBeInTheDocument();
+    const copyBtn = screen.getByRole("button", { name: "Salin kode" });
+    expect(copyBtn).toBeInTheDocument();
+
+    await act(async () => {
+      copyBtn.click();
+    });
+    expect(writeTextSpy).toHaveBeenCalledWith('println!("Hello!");');
+
+    vi.unstubAllGlobals();
+
+  });
+
+  it("8. markdownComponents.code renders inline code badge when not a language code block", () => {
+    const CodeComp = markdownComponents.code;
+    render(
+      React.createElement(CodeComp, {
+        children: "npm install",
+      })
+    );
+
+    const inlineEl = screen.getByText("npm install");
+    expect(inlineEl.tagName).toBe("CODE");
+    expect(inlineEl.className).toContain("text-amber-300");
+  });
 });
+

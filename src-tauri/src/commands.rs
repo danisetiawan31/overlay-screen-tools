@@ -53,6 +53,13 @@ pub struct SendAudioBlobArgs {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AskAiTextArgs {
+    pub prompt: String,
+}
+
+
 #[cfg(debug_assertions)]
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -443,6 +450,117 @@ pub async fn send_audio_blob(args: SendAudioBlobArgs, app: tauri::AppHandle) -> 
     }
 }
 
+pub fn validate_ask_ai_prompt(prompt: &str) -> Result<String, String> {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        Err("Prompt pertanyaan tidak boleh kosong".to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn ask_ai_text(args: AskAiTextArgs, app: tauri::AppHandle) -> Result<(), String> {
+    let prompt_text = validate_ask_ai_prompt(&args.prompt)?;
+
+    let (openrouter_keys, current_gen, obsidian_vault_path) = {
+        let state = app.state::<Mutex<OverlayState>>();
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state_guard.qa_generation += 1;
+        let gen = state_guard.qa_generation;
+        let cfg = state_guard
+            .config
+            .clone()
+            .ok_or_else(|| "Config belum dimuat di memori aplikasi".to_string())?;
+        (
+            cfg.openrouter_api_keys,
+            gen,
+            cfg.obsidian_vault_path,
+        )
+    };
+
+    // Emit transcript:result agar UI langsung menampilkan pertanyaan teks di panel
+    let _ = app.emit(
+        "transcript:result",
+        crate::TranscriptResultPayload {
+            text: prompt_text.clone(),
+        },
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Gagal inisialisasi HTTP client: {}", e))?;
+
+    // Ekstraksi konteks catatan Obsidian jika vault_path dikonfigurasi
+    let vault_context = if let Some(ref path_str) = obsidian_vault_path {
+        let path = std::path::Path::new(path_str);
+        match crate::vault::scan_vault_markdown_files(path) {
+            Ok(docs) => {
+                let ctx = crate::vault::extract_relevant_context(&docs, &prompt_text, 3000);
+                if let Some(ref matched) = ctx {
+                    println!(
+                        "[VAULT CONTEXT] Menyuntikkan {} karakter konteks Obsidian ke prompt OpenRouter (Text Prompt)",
+                        matched.len()
+                    );
+                }
+                ctx
+            }
+            Err(err) => {
+                eprintln!(
+                    "[VAULT ERROR] Gagal memindai Obsidian Vault di '{}': {}",
+                    path_str, err
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // AI answering via OpenRouter dengan loop fallback API key dan injeksi konteks Obsidian
+    let answer_res = crate::execute_fallback_keys(&openrouter_keys, |key| {
+        let key = key.to_string();
+        let client = client.clone();
+        let prompt_text = prompt_text.clone();
+        let vault_context = vault_context.clone();
+        async move {
+            crate::call_openrouter_ai(&client, &key, &prompt_text, vault_context.as_deref()).await
+        }
+    })
+    .await;
+
+    // Discard stale check setelah AI: jika ada request baru (audio atau teks), buang hasil answer
+    if !crate::is_qa_generation_current(&app, current_gen) {
+        println!(
+            "[QA] Request generasi {} sudah stale setelah AI, discard answer.",
+            current_gen
+        );
+        return Ok(());
+    }
+
+    match answer_res {
+        Ok(ans) => {
+            let _ = app.emit("answer:result", crate::AnswerResultPayload { text: ans });
+            Ok(())
+        }
+        Err(err_msg) => {
+            let _ = app.emit(
+                "qa:error",
+                crate::QaErrorPayload {
+                    stage: "ai".to_string(),
+                    message: err_msg.clone(),
+                },
+            );
+            Err(err_msg)
+        }
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn get_app_state(state: tauri::State<Mutex<OverlayState>>) -> Result<AppState, String> {
@@ -522,4 +640,18 @@ mod tests {
     fn test_is_matching_dialog_window_null_hwnd_rejected() {
         assert!(!is_matching_dialog_window(0, 1234, 1001, 1234));
     }
+
+    #[test]
+    fn test_validate_ask_ai_prompt_empty_rejected() {
+        assert!(validate_ask_ai_prompt("").is_err());
+        assert!(validate_ask_ai_prompt("   ").is_err());
+        assert!(validate_ask_ai_prompt("\n\t  \r").is_err());
+    }
+
+    #[test]
+    fn test_validate_ask_ai_prompt_valid_trimmed_accepted() {
+        let res = validate_ask_ai_prompt("  Halo apa kabar?  ");
+        assert_eq!(res, Ok("Halo apa kabar?".to_string()));
+    }
 }
+
