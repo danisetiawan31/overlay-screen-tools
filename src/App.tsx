@@ -1,7 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { commands } from "./bindings";
-import { FontSizeControl } from "./components/FontSizeControl";
+import {
+  FontSizeControl,
+  MIN_FONT_SIZE,
+  MAX_FONT_SIZE,
+  DEFAULT_FONT_SIZE,
+} from "./components/FontSizeControl";
 import { TabNav, TabType } from "./components/TabNav";
 import { NotesPanel } from "./components/NotesPanel";
 import { QaPanel } from "./components/QaPanel";
@@ -82,10 +87,10 @@ export const App: React.FC = () => {
   }, []);
 
   const handleUpdateFontSize = async (newSize: number) => {
+    setFontSize(newSize);
     try {
       const res = await commands.updateFontSize(newSize);
       if (res.status === "ok") {
-        setFontSize(newSize);
         setUpdateError(null);
       } else {
         setUpdateError(res.error);
@@ -95,17 +100,86 @@ export const App: React.FC = () => {
     }
   };
 
+  // In-App Keyboard & Wheel Shortcuts for Font Zoom (Ctrl +, Ctrl -, Ctrl 0, Ctrl + Wheel)
+  useEffect(() => {
+    if (fontSize === null) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      if (!isCtrlOrCmd) return;
+
+      if (e.key === "+" || e.key === "=" || e.key === "Add") {
+        e.preventDefault();
+        const nextSize = Math.min(MAX_FONT_SIZE, fontSize + 1);
+        if (nextSize !== fontSize) {
+          handleUpdateFontSize(nextSize);
+        }
+      } else if (e.key === "-" || e.key === "_" || e.key === "Subtract") {
+        e.preventDefault();
+        const nextSize = Math.max(MIN_FONT_SIZE, fontSize - 1);
+        if (nextSize !== fontSize) {
+          handleUpdateFontSize(nextSize);
+        }
+      } else if (e.key === "0" || e.key === "Numpad0") {
+        e.preventDefault();
+        if (fontSize !== DEFAULT_FONT_SIZE) {
+          handleUpdateFontSize(DEFAULT_FONT_SIZE);
+        }
+      }
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      if (!isCtrlOrCmd) return;
+
+      // Prevent default webview whole-page zoom
+      e.preventDefault();
+
+      if (e.deltaY < 0) {
+        const nextSize = Math.min(MAX_FONT_SIZE, fontSize + 1);
+        if (nextSize !== fontSize) {
+          handleUpdateFontSize(nextSize);
+        }
+      } else if (e.deltaY > 0) {
+        const nextSize = Math.max(MIN_FONT_SIZE, fontSize - 1);
+        if (nextSize !== fontSize) {
+          handleUpdateFontSize(nextSize);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("wheel", handleWheel, { passive: false });
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("wheel", handleWheel);
+    };
+  }, [fontSize]);
+
   return (
     <div className="flex flex-col h-screen w-screen bg-zinc-950 text-zinc-100 font-sans">
+      {/* Unified Compact Top Bar: Tabs di kiri, Font Control & F9 Toggle di kanan */}
       <header
         data-tauri-drag-region
-        className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800 cursor-move select-none"
+        className="flex items-center justify-between px-3 pt-1 border-b border-zinc-800 bg-zinc-900/90 cursor-move select-none shrink-0"
       >
-        <div className="flex items-center space-x-2 select-none">
-          <img src={appLogo} alt="App Logo" className="w-4 h-4 rounded-sm object-contain" />
-          <h1 className="text-xs font-semibold text-zinc-400 select-none">Screen Overlay Tool</h1>
-        </div>
+        {/* Sisi Kiri: Logo mini + Tab Navigation */}
         <div className="flex items-center space-x-2">
+          <img
+            src={appLogo}
+            alt="App Logo"
+            className="w-3.5 h-3.5 rounded-sm object-contain opacity-70 mb-0.5 select-none pointer-events-none"
+          />
+          <TabNav
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            qaAvailable={qaAvailable === true}
+          />
+        </div>
+
+        {/* Sisi Kanan: Font Size Control & F9 Toggle Badge */}
+        <div className="flex items-center space-x-2 pb-1">
           {fontSize !== null && (
             <FontSizeControl
               fontSize={fontSize}
@@ -113,20 +187,20 @@ export const App: React.FC = () => {
             />
           )}
           <div className="flex items-center space-x-1 text-xs text-zinc-500">
-            <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">F9</span>
+            <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">F9</span>
             <span>Toggle</span>
           </div>
         </div>
       </header>
 
       {error && (
-        <div role="alert" className="bg-red-950/80 border-b border-red-800/80 px-3 py-2 text-xs text-red-300 flex items-center justify-between">
+        <div role="alert" className="bg-red-950/80 border-b border-red-800/80 px-3 py-2 text-xs text-red-300 flex items-center justify-between shrink-0">
           <span>Gagal memuat status aplikasi: {error}</span>
         </div>
       )}
 
       {updateError && (
-        <div role="alert" className="bg-red-950/80 border-b border-red-800/80 px-3 py-2 text-xs text-red-300 flex items-center justify-between">
+        <div role="alert" className="bg-red-950/80 border-b border-red-800/80 px-3 py-2 text-xs text-red-300 flex items-center justify-between shrink-0">
           <span>Gagal mengubah ukuran font: {updateError}</span>
           <button
             type="button"
@@ -144,16 +218,10 @@ export const App: React.FC = () => {
           <span>Memuat status aplikasi...</span>
         </div>
       ) : (
-        <>
-          <TabNav
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            qaAvailable={qaAvailable === true}
-          />
-          <main
-            className="flex-1 p-4 overflow-hidden min-h-0"
-            style={{ fontSize: fontSize ? `${fontSize}px` : undefined }}
-          >
+        <main
+          className="flex-1 p-4 overflow-hidden min-h-0"
+          style={{ fontSize: fontSize ? `${fontSize}px` : undefined }}
+        >
             <div
               role="tabpanel"
               id="panel-notes"
@@ -171,7 +239,6 @@ export const App: React.FC = () => {
               <QaPanel qaAvailable={qaAvailable === true} />
             </div>
           </main>
-        </>
       )}
     </div>
   );

@@ -367,4 +367,111 @@ describe("NotesPanel Component", () => {
     // Konten yang ter-render adalah konten yang sudah di-update di background
     expect(screen.getByRole("heading", { level: 1, name: "Doc 2 Modified in Background" })).toBeInTheDocument();
   });
+
+  it("15. Ctrl + Shift + ArrowRight navigates to next tab and wraps around", async () => {
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Doc 1" },
+          { path: "/notes/doc2.md", title: "doc2.md", content: "# Doc 2" },
+          { path: "/notes/doc3.md", title: "doc3.md", content: "# Doc 3" },
+        ],
+        activePath: "/notes/doc1.md",
+        content: "# Doc 1",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 1" })).toBeInTheDocument();
+
+    // 1st press: doc1 -> doc2
+    fireEvent.keyDown(window, { key: "ArrowRight", ctrlKey: true, shiftKey: true });
+    expect(commands.setActiveNotesFile).toHaveBeenCalledWith("/notes/doc2.md");
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 2" })).toBeInTheDocument();
+
+    // 2nd press: doc2 -> doc3
+    fireEvent.keyDown(window, { key: "ArrowRight", ctrlKey: true, shiftKey: true });
+    expect(commands.setActiveNotesFile).toHaveBeenCalledWith("/notes/doc3.md");
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 3" })).toBeInTheDocument();
+
+    // 3rd press: doc3 -> wraps around to doc1
+    fireEvent.keyDown(window, { key: "ArrowRight", ctrlKey: true, shiftKey: true });
+    expect(commands.setActiveNotesFile).toHaveBeenCalledWith("/notes/doc1.md");
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 1" })).toBeInTheDocument();
+  });
+
+  it("16. Ctrl + Shift + ArrowLeft navigates to previous tab and wraps around", async () => {
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Doc 1" },
+          { path: "/notes/doc2.md", title: "doc2.md", content: "# Doc 2" },
+        ],
+        activePath: "/notes/doc1.md",
+        content: "# Doc 1",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 1" })).toBeInTheDocument();
+
+    // 1st press left: doc1 -> wraps around to doc2
+    fireEvent.keyDown(window, { key: "ArrowLeft", ctrlKey: true, shiftKey: true });
+    expect(commands.setActiveNotesFile).toHaveBeenCalledWith("/notes/doc2.md");
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 2" })).toBeInTheDocument();
+
+    // 2nd press left: doc2 -> doc1
+    fireEvent.keyDown(window, { key: "ArrowLeft", ctrlKey: true, shiftKey: true });
+    expect(commands.setActiveNotesFile).toHaveBeenCalledWith("/notes/doc1.md");
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 1" })).toBeInTheDocument();
+  });
+
+  it("17. does not trigger tab navigation if documents length <= 1", async () => {
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [{ path: "/notes/doc1.md", title: "doc1.md", content: "# Solo Doc" }],
+        activePath: "/notes/doc1.md",
+        content: "# Solo Doc",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Solo Doc" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "ArrowRight", ctrlKey: true, shiftKey: true });
+    expect(commands.setActiveNotesFile).not.toHaveBeenCalled();
+  });
+
+  it("18. does not trigger tab navigation when focus is inside a textarea or input", async () => {
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Doc 1" },
+          { path: "/notes/doc2.md", title: "doc2.md", content: "# Doc 2" },
+        ],
+        activePath: "/notes/doc1.md",
+        content: "# Doc 1",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 1" })).toBeInTheDocument();
+
+    // Switch to scratchpad mode where textarea exists
+    const scratchpadButton = screen.getByRole("button", { name: /scratchpad/i });
+    fireEvent.click(scratchpadButton);
+
+    const textarea = screen.getByPlaceholderText(/tulis catatan ad-hoc/i);
+    fireEvent.keyDown(textarea, { key: "ArrowRight", ctrlKey: true, shiftKey: true });
+
+    expect(commands.setActiveNotesFile).not.toHaveBeenCalled();
+  });
 });

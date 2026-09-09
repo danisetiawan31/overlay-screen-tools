@@ -5,6 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 import { FolderOpen, FileText, Edit3, AlertCircle } from "lucide-react";
 import { commands, events, type NoteDocument } from "../bindings";
 import { DocumentTabBar } from "./DocumentTabBar";
+import { markdownComponents } from "./MermaidRenderer";
 
 type NotesSubMode = "file" | "scratchpad";
 
@@ -125,7 +126,48 @@ export function NotesPanel() {
     });
   };
 
-  // 4. Handler tombol "Pilih File" / New Tab dengan penanganan 3 cabang
+  // 4. Keyboard navigation: Ctrl + Shift + ArrowRight / ArrowLeft untuk switch tab dokumen
+  useEffect(() => {
+    if (subMode !== "file" || documents.length <= 1) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      if (isCtrlOrCmd && e.shiftKey) {
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          const currentIndex = documents.findIndex((d) => d.path === activePath);
+          const nextIndex =
+            currentIndex === -1 ? 0 : (currentIndex + 1) % documents.length;
+          handleSelectTab(documents[nextIndex].path);
+        } else if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          const currentIndex = documents.findIndex((d) => d.path === activePath);
+          const prevIndex =
+            currentIndex === -1
+              ? documents.length - 1
+              : (currentIndex - 1 + documents.length) % documents.length;
+          handleSelectTab(documents[prevIndex].path);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [subMode, documents, activePath]);
+
+  // 5. Handler tombol "Pilih File" / New Tab dengan penanganan 3 cabang
   const handlePickFile = async () => {
     setIsPicking(true);
     try {
@@ -241,6 +283,7 @@ export function NotesPanel() {
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeHighlight]}
+                components={markdownComponents}
               >
                 {activeDocument.content}
               </ReactMarkdown>

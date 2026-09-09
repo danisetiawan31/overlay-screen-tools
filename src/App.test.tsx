@@ -258,4 +258,146 @@ describe("App Component", () => {
 
     expect(mockUnlisten).toHaveBeenCalled();
   });
+
+  it("increases font size on Ctrl + '+' and does not exceed MAX_FONT_SIZE (32px)", async () => {
+    vi.mocked(commands.getAppState).mockResolvedValue({
+      status: "ok",
+      data: { fontSize: 31, qaAvailable: true },
+    });
+    vi.mocked(commands.updateFontSize).mockResolvedValue({
+      status: "ok",
+      data: null,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("31px")).toBeInTheDocument();
+    });
+
+    // 1st press: 31 -> 32
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "+", ctrlKey: true });
+      await Promise.resolve();
+    });
+    expect(commands.updateFontSize).toHaveBeenCalledWith(32);
+    expect(screen.getByText("32px")).toBeInTheDocument();
+
+    // 2nd press: 32 -> capped at 32
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "=", ctrlKey: true });
+      await Promise.resolve();
+    });
+    // Still 32, updateFontSize should not be called again
+    expect(commands.updateFontSize).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("32px")).toBeInTheDocument();
+  });
+
+  it("decreases font size on Ctrl + '-' and does not go below MIN_FONT_SIZE (10px)", async () => {
+    vi.mocked(commands.getAppState).mockResolvedValue({
+      status: "ok",
+      data: { fontSize: 11, qaAvailable: true },
+    });
+    vi.mocked(commands.updateFontSize).mockResolvedValue({
+      status: "ok",
+      data: null,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("11px")).toBeInTheDocument();
+    });
+
+    // 1st press: 11 -> 10
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "-", ctrlKey: true });
+      await Promise.resolve();
+    });
+    expect(commands.updateFontSize).toHaveBeenCalledWith(10);
+    expect(screen.getByText("10px")).toBeInTheDocument();
+
+    // 2nd press: 10 -> capped at 10
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "-", ctrlKey: true });
+      await Promise.resolve();
+    });
+    expect(commands.updateFontSize).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("10px")).toBeInTheDocument();
+  });
+
+  it("resets font size to 14px on Ctrl + '0'", async () => {
+    vi.mocked(commands.getAppState).mockResolvedValue({
+      status: "ok",
+      data: { fontSize: 24, qaAvailable: true },
+    });
+    vi.mocked(commands.updateFontSize).mockResolvedValue({
+      status: "ok",
+      data: null,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("24px")).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "0", ctrlKey: true });
+      await Promise.resolve();
+    });
+    expect(commands.updateFontSize).toHaveBeenCalledWith(14);
+    expect(screen.getByText("14px")).toBeInTheDocument();
+  });
+
+  it("zooms in and out with Ctrl + Wheel event", async () => {
+    vi.mocked(commands.getAppState).mockResolvedValue({
+      status: "ok",
+      data: { fontSize: 16, qaAvailable: true },
+    });
+    vi.mocked(commands.updateFontSize).mockResolvedValue({
+      status: "ok",
+      data: null,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("16px")).toBeInTheDocument();
+    });
+
+    // Wheel up with Ctrl: 16 -> 17
+    await act(async () => {
+      fireEvent.wheel(window, { deltaY: -100, ctrlKey: true });
+      await Promise.resolve();
+    });
+    expect(commands.updateFontSize).toHaveBeenCalledWith(17);
+    expect(screen.getByText("17px")).toBeInTheDocument();
+
+    // Wheel down with Ctrl: 17 -> 16
+    await act(async () => {
+      fireEvent.wheel(window, { deltaY: 100, ctrlKey: true });
+      await Promise.resolve();
+    });
+    expect(commands.updateFontSize).toHaveBeenCalledWith(16);
+    expect(screen.getByText("16px")).toBeInTheDocument();
+  });
+
+  it("ignores keydown and wheel without Ctrl key", async () => {
+    vi.mocked(commands.getAppState).mockResolvedValue({
+      status: "ok",
+      data: { fontSize: 14, qaAvailable: true },
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("14px")).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: "+", ctrlKey: false });
+    fireEvent.wheel(window, { deltaY: -100, ctrlKey: false });
+
+    expect(commands.updateFontSize).not.toHaveBeenCalled();
+  });
 });

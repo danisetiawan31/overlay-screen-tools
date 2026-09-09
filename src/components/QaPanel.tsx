@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { Mic, MicOff, AlertCircle, MessageSquare, Sparkles, Radio } from "lucide-react";
 import { commands, events } from "../bindings";
+import { markdownComponents } from "./MermaidRenderer";
 
 export type QaStatus = "idle" | "recording" | "transcribing" | "answering" | "error";
 
@@ -351,6 +352,7 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeHighlight]}
+                components={markdownComponents}
               >
                 {qaState.answer}
               </ReactMarkdown>

@@ -2,6 +2,7 @@ import React from "react";
 
 export const MIN_FONT_SIZE = 10;
 export const MAX_FONT_SIZE = 32;
+export const DEFAULT_FONT_SIZE = 14;
 
 export interface FontSizeControlProps {
   fontSize: number;

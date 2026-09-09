@@ -14,7 +14,7 @@ export const TabNav: React.FC<TabNavProps> = ({
   qaAvailable,
 }) => {
   return (
-    <div role="tablist" className="flex items-center space-x-1 border-b border-zinc-800 bg-zinc-900/50 px-3 pt-1">
+    <div role="tablist" className="flex items-center space-x-1">
       <button
         type="button"
         role="tab"
