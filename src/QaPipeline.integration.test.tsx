@@ -174,9 +174,9 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
   it("1. Full pipeline sukses: F8 pressed (>400ms) -> auto-switch -> transcript -> answer", async () => {
     render(<App />);
 
-    // 1. Initial render di Notes tab
+    // 1. Initial render di Notes tab dan tunggu initAppState selesai (Live Q&A enabled)
     await waitFor(() => {
-      expect(screen.getByRole("tabpanel", { name: /^notes$/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /^live q&a$/i })).not.toBeDisabled();
     });
 
     // 2. Trigger F8 Press (E2E simulasi) -> emit qa:recording-started
@@ -185,9 +185,11 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
     });
 
     // Auto-switch ke tab Q&A dan mulai merekam
-    expect(screen.getByRole("tabpanel", { name: /^live q&a$/i })).toBeInTheDocument();
-    expect(screen.getByText(/Merekam suara.../i)).toBeInTheDocument();
-    expect(mockRecorderInstance.start).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(screen.getByRole("tabpanel", { name: /^live q&a$/i })).toBeInTheDocument();
+      expect(screen.getByText(/Merekam suara.../i)).toBeInTheDocument();
+      expect(mockRecorderInstance.start).toHaveBeenCalledTimes(1);
+    });
 
     // Kirim chunk audio palsu
     const fakeChunk = new Blob(["audio-data-test"], { type: "audio/webm" });
@@ -229,7 +231,7 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByRole("tabpanel", { name: /^notes$/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /^live q&a$/i })).not.toBeDisabled();
     });
 
     // Request 1: Start & End
@@ -286,7 +288,7 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByRole("tabpanel", { name: /^notes$/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /^live q&a$/i })).not.toBeDisabled();
     });
 
     // Quick press F8
@@ -318,7 +320,7 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByRole("tabpanel", { name: /^notes$/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /^live q&a$/i })).not.toBeDisabled();
     });
 
     // F8 Press
@@ -327,9 +329,11 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
     });
 
     // Banner error lokal muncul
-    const alert = screen.getByRole("alert");
-    expect(alert).toBeInTheDocument();
-    expect(alert).toHaveTextContent(/Mikrofon: NotAllowedError: permission denied/i);
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert).toBeInTheDocument();
+      expect(alert).toHaveTextContent(/Mikrofon: NotAllowedError: permission denied/i);
+    });
 
     // F8 Release
     await act(async () => {
@@ -344,7 +348,7 @@ describe("Live Q&A Mode — Full Pipeline E2E Integration Tests", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByRole("tabpanel", { name: /^notes$/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /^live q&a$/i })).not.toBeDisabled();
     });
 
     // Tab ke Q&A

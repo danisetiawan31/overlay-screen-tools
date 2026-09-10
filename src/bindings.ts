@@ -17,6 +17,9 @@ export const commands = {
 	closeNotesFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("close_notes_file", { path })),
 	sendAudioBlob: (args: SendAudioBlobArgs) => typedError<null, string>(__TAURI_INVOKE("send_audio_blob", { args })),
 	askAiText: (args: AskAiTextArgs) => typedError<null, string>(__TAURI_INVOKE("ask_ai_text", { args })),
+	askAiScreen: () => typedError<null, string>(__TAURI_INVOKE("ask_ai_screen")),
+	askAiSelectedText: () => typedError<null, string>(__TAURI_INVOKE("ask_ai_selected_text")),
+	copyToClipboard: (args: CopyToClipboardArgs) => typedError<null, string>(__TAURI_INVOKE("copy_to_clipboard", { args })),
 	testTriggerHotkey: (args: TestTriggerHotkeyArgs) => typedError<null, string>(__TAURI_INVOKE("test_trigger_hotkey", { args })),
 };
 
@@ -47,6 +50,10 @@ export type AskAiTextArgs = {
 
 export type ConfigErrorPayload = {
 	message: string,
+};
+
+export type CopyToClipboardArgs = {
+	text: string,
 };
 
 export type NoteDocument = {

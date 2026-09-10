@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import mermaid from "mermaid";
 import { Copy, Check } from "lucide-react";
+import { commands } from "../bindings";
 
 mermaid.initialize({
   startOnLoad: false,
@@ -110,6 +111,58 @@ export function extractTextContent(children: React.ReactNode): string {
   return "";
 }
 
+/**
+ * Menyalin teks ke clipboard sistem operasi.
+ * Mendahulukan Tauri native command agar dapat menyalin meskipun window berstatus WS_EX_NOACTIVATE
+ * (tanpa focus dokumen Chromium), lalu fallback ke Web API dan execCommand.
+ */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+
+  // 1. Prioritaskan Win32 native clipboard via Tauri IPC commands.
+  // Ini bekerja 100% tanpa memerlukan keyboard/window focus (WS_EX_NOACTIVATE aman).
+  try {
+    const res = await commands.copyToClipboard({ text });
+    if (res.status === "ok") {
+      return true;
+    }
+  } catch {
+    // Fallback jika bukan environment Tauri (misal browser biasa / vitest)
+  }
+
+  // 2. Fallback Web Clipboard API
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fallback jika document tidak memiliki fokus
+  }
+
+  // 3. Fallback textarea execCommand copy
+  try {
+    if (typeof document !== "undefined") {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "-9999px";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const success = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      if (success) return true;
+    }
+  } catch {
+    // Abaikan
+  }
+
+  return false;
+}
+
 export const CodeBlockWrapper: React.FC<React.ComponentPropsWithoutRef<"pre">> = ({
   children,
   className,
@@ -133,12 +186,10 @@ export const CodeBlockWrapper: React.FC<React.ComponentPropsWithoutRef<"pre">> =
 
   const handleCopy = async () => {
     if (!rawCode) return;
-    try {
-      await navigator.clipboard.writeText(rawCode);
+    const ok = await copyTextToClipboard(rawCode);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
     }
   };
 

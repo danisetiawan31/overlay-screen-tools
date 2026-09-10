@@ -3,9 +3,19 @@ import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { Mic, MicOff, AlertCircle, MessageSquare, Sparkles, Radio, SendHorizontal } from "lucide-react";
+import {
+  Mic,
+  MicOff,
+  AlertCircle,
+  MessageSquare,
+  Sparkles,
+  Radio,
+  SendHorizontal,
+  Copy,
+  Check,
+} from "lucide-react";
 import { commands, events } from "../bindings";
-import { markdownComponents } from "./MermaidRenderer";
+import { markdownComponents, copyTextToClipboard } from "./MermaidRenderer";
 
 export type QaStatus = "idle" | "recording" | "transcribing" | "answering" | "error";
 
@@ -28,7 +38,12 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
     error: null,
   });
   const [promptInput, setPromptInput] = useState("");
+  const [answerCopied, setAnswerCopied] = useState(false);
+  const [selectedText, setSelectedText] = useState("");
+  const [selectionCopied, setSelectionCopied] = useState(false);
+  const [floatingPos, setFloatingPos] = useState<{ x: number; y: number } | null>(null);
 
+  const answerContainerRef = useRef<HTMLDivElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -38,6 +53,65 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
     qaState.status === "recording" ||
     qaState.status === "transcribing" ||
     qaState.status === "answering";
+
+  const handleCopyAnswer = async () => {
+    if (!qaState.answer) return;
+    const ok = await copyTextToClipboard(qaState.answer);
+    if (ok) {
+      setAnswerCopied(true);
+      setTimeout(() => setAnswerCopied(false), 2000);
+    }
+  };
+
+  const handleSelectionMouseUp = () => {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().trim() : "";
+    if (text.length > 0 && answerContainerRef.current) {
+      const range = sel?.rangeCount ? sel.getRangeAt(0) : null;
+      if (range) {
+        const rect = range.getBoundingClientRect();
+        if (rect.width > 0 || rect.height > 0) {
+          setSelectedText(text);
+          setSelectionCopied(false);
+          setFloatingPos({
+            x: Math.min(
+              Math.max(10, rect.left + rect.width / 2 - 50),
+              window.innerWidth - 130
+            ),
+            y: Math.max(10, rect.top - 36),
+          });
+          return;
+        }
+      }
+    }
+    setFloatingPos(null);
+    setSelectedText("");
+  };
+
+  const handleCopySelectedText = async () => {
+    if (!selectedText) return;
+    const ok = await copyTextToClipboard(selectedText);
+    if (ok) {
+      setSelectionCopied(true);
+      setTimeout(() => {
+        setSelectionCopied(false);
+        setFloatingPos(null);
+        setSelectedText("");
+      }, 1500);
+    }
+  };
+
+  useEffect(() => {
+    const handleCopyEvent = () => {
+      const sel = window.getSelection();
+      const text = sel ? sel.toString().trim() : "";
+      if (text) {
+        copyTextToClipboard(text);
+      }
+    };
+    window.addEventListener("copy", handleCopyEvent);
+    return () => window.removeEventListener("copy", handleCopyEvent);
+  }, []);
 
   const handleSubmitPrompt = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -381,13 +455,40 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
         </div>
 
         {/* Answer Panel */}
-        <div className="flex-1 bg-zinc-900/40 border border-zinc-800/60 rounded-md p-3 overflow-y-auto min-h-0">
-          <div className="flex items-center space-x-1.5 text-xs font-semibold text-zinc-400 mb-2">
-            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-            <span>Jawaban AI</span>
+        <div
+          ref={answerContainerRef}
+          onMouseUp={handleSelectionMouseUp}
+          className="relative flex-1 bg-zinc-900/40 border border-zinc-800/60 rounded-md p-3 overflow-y-auto min-h-0 select-text"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center space-x-1.5 text-xs font-semibold text-zinc-400">
+              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+              <span>Jawaban AI</span>
+            </div>
+            {qaState.answer && (
+              <button
+                type="button"
+                onClick={handleCopyAnswer}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-200 hover:text-white text-xs font-medium transition border border-zinc-700/70 shadow-xs"
+                title="Salin seluruh jawaban AI ke clipboard"
+                aria-label="Salin jawaban"
+              >
+                {answerCopied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">Tersalin!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Salin Jawaban</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
           {qaState.answer ? (
-            <div className="markdown-body prose prose-invert max-w-none text-zinc-200 leading-relaxed text-sm break-words space-y-2 [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-zinc-100 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-zinc-100 [&_h3]:text-xs [&_h3]:font-medium [&_h3]:text-zinc-200 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_table]:border-collapse [&_th]:border [&_th]:border-zinc-800 [&_th]:p-1.5 [&_td]:border [&_td]:border-zinc-800 [&_td]:p-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-purple-500 [&_blockquote]:pl-3 [&_blockquote]:text-zinc-400 [&_blockquote]:italic [&_p]:my-1.5">
+            <div className="markdown-body prose prose-invert max-w-none text-zinc-200 leading-relaxed text-sm break-words space-y-2 select-text [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-zinc-100 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-zinc-100 [&_h3]:text-xs [&_h3]:font-medium [&_h3]:text-zinc-200 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_table]:border-collapse [&_th]:border [&_th]:border-zinc-800 [&_th]:p-1.5 [&_td]:border [&_td]:border-zinc-800 [&_td]:p-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-purple-500 [&_blockquote]:pl-3 [&_blockquote]:text-zinc-400 [&_blockquote]:italic [&_p]:my-1.5">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeHighlight]}
@@ -408,6 +509,39 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
           )}
         </div>
       </div>
+
+      {/* Floating Copy Button for highlighted text selection */}
+      {floatingPos && selectedText && (
+        <div
+          style={{
+            position: "fixed",
+            left: `${floatingPos.x}px`,
+            top: `${floatingPos.y}px`,
+            zIndex: 9999,
+          }}
+          className="animate-in fade-in zoom-in-95 duration-150"
+        >
+          <button
+            type="button"
+            onClick={handleCopySelectedText}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium shadow-lg shadow-purple-950/50 border border-purple-400/30 transition active:scale-95 cursor-pointer"
+            title="Salin teks yang disorot"
+            aria-label="Salin teks terpilih"
+          >
+            {selectionCopied ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-300" />
+                <span>Tersalin!</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5" />
+                <span>Salin ({selectedText.length > 15 ? `${selectedText.length} char` : "Teks"})</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
 
       {/* Text Prompt Input Bar (Opsi 1 Single-line) */}
       <form

@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import React from "react";
 import mermaid from "mermaid";
-import { MermaidRenderer, extractTextContent, markdownComponents } from "./MermaidRenderer";
+import {
+  MermaidRenderer,
+  extractTextContent,
+  markdownComponents,
+  copyTextToClipboard,
+} from "./MermaidRenderer";
+import { commands } from "../bindings";
 
 vi.mock("mermaid", () => {
   return {
@@ -148,6 +154,22 @@ describe("MermaidRenderer Component", () => {
     const inlineEl = screen.getByText("npm install");
     expect(inlineEl.tagName).toBe("CODE");
     expect(inlineEl.className).toContain("text-amber-300");
+  });
+
+  it("9. copyTextToClipboard prioritizes commands.copyToClipboard", async () => {
+    const copySpy = vi.spyOn(commands, "copyToClipboard").mockResolvedValue({
+      status: "ok",
+      data: null,
+    });
+    const writeTextSpy = vi.fn();
+    vi.stubGlobal("navigator", { clipboard: { writeText: writeTextSpy } });
+
+    const ok = await copyTextToClipboard("const a = 10;");
+    expect(ok).toBe(true);
+    expect(copySpy).toHaveBeenCalledWith({ text: "const a = 10;" });
+    expect(writeTextSpy).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
   });
 });
 

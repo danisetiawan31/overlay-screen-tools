@@ -20,7 +20,7 @@
         "height": 350,
         "alwaysOnTop": true,
         "center": true,
-        "focus": true,
+        "focus": false,
         "skipTaskbar": true
       }
     ],

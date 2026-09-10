@@ -1,5 +1,7 @@
+pub mod clipboard;
 pub mod commands;
 pub mod config;
+pub mod screen;
 pub mod vault;
 
 use config::{Config, ConfigErrorPayload};
@@ -10,14 +12,15 @@ use std::sync::Mutex;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 use tauri_specta::{collect_commands, collect_events, Builder};
 use windows_sys::Win32::Foundation::{HWND, LPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, EnumChildWindows, GetWindowLongPtrW, IsWindow, SetWindowDisplayAffinity,
     SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW,
 };
 
 const WDA_EXCLUDEFROMCAPTURE: u32 = 0x00000011;
@@ -150,10 +153,13 @@ fn apply_stealth(hwnd_val: isize) {
             SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, dummy as isize);
         }
 
-        // Hapus WS_EX_TOOLWINDOW (mengembalikan ukuran tombol X dan titlebar normal)
-        // dan hapus WS_EX_APPWINDOW (memastikan tidak muncul di taskbar atau Alt+Tab)
+        // Hapus WS_EX_TOOLWINDOW (mengembalikan ukuran tombol X dan titlebar normal),
+        // hapus WS_EX_APPWINDOW (memastikan tidak muncul di taskbar atau Alt+Tab),
+        // dan pasang WS_EX_NOACTIVATE (mencegah klik mouse merebut fokus dari browser)
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let target_ex_style = ex_style & !(WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize);
+        let target_ex_style = (ex_style | (WS_EX_NOACTIVATE as isize))
+            & !(WS_EX_TOOLWINDOW as isize)
+            & !(WS_EX_APPWINDOW as isize);
         if ex_style != target_ex_style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, target_ex_style);
             SetWindowPos(
@@ -165,7 +171,7 @@ fn apply_stealth(hwnd_val: isize) {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
             );
-            println!("[STEALTH] Restored normal caption/close button while hidden from Alt+Tab via owner window");
+            println!("[STEALTH] Restored normal caption/close button, hidden from Alt+Tab via owner window, and applied WS_EX_NOACTIVATE");
         }
     }
 }
@@ -383,19 +389,47 @@ where
     }
 
     let mut last_error = String::from("Semua API key gagal");
-    for key in valid_keys {
+    println!("[FALLBACK] Memulai percobaan fallback dengan {} API key terkonfigurasi.", valid_keys.len());
+    for (idx, key) in valid_keys.iter().enumerate() {
+        let masked = if key.len() >= 14 {
+            format!("{}...{}", &key[..8], &key[key.len() - 4..])
+        } else {
+            "***".to_string()
+        };
+        println!("[FALLBACK] Mencoba key [{}/{}] ({})", idx + 1, valid_keys.len(), masked);
         match operation(key).await {
-            Ok(val) => return Ok(val),
+            Ok(val) => {
+                println!("[FALLBACK] Key [{}/{}] ({}) BERHASIL!", idx + 1, valid_keys.len(), masked);
+                return Ok(val);
+            }
             Err((status, msg)) => match classify_http_error(status, &msg) {
-                RetryAction::StopNonTransient(err) => return Err(err),
+                RetryAction::StopNonTransient(err) => {
+                    eprintln!(
+                        "[FALLBACK] Key [{}/{}] non-transient error: {}. Hentikan fallback.",
+                        idx + 1, valid_keys.len(), err
+                    );
+                    return Err(err);
+                }
                 RetryAction::RetryNextKey(err) => {
+                    eprintln!(
+                        "[FALLBACK] Key [{}/{}] gagal ({:?}): {}. Beralih ke key berikutnya...",
+                        idx + 1, valid_keys.len(), status, err
+                    );
                     last_error = err;
                 }
             },
         }
     }
 
-    Err(last_error)
+    if valid_keys.len() > 1 {
+        Err(format!(
+            "Semua {} API key fallback gagal. Error percobaan terakhir: {}",
+            valid_keys.len(),
+            last_error
+        ))
+    } else {
+        Err(last_error)
+    }
 }
 
 /// Helper untuk memanggil Groq Whisper STT API via multipart form-data.
@@ -477,15 +511,51 @@ pub async fn call_openrouter_ai(
   4. **Fishing Pond POS** (CodeIgniter 4, MySQL) — Point of Sale with dynamic duration billing and ESC/POS thermal printing.
 - **Communication Style**: First-person ('Saya' / 'I'), concise, confident, structured (2-4 bullet points or short paragraphs), grounded in real technical facts.";
 
+    let prompt_rules = "\
+### CRITICAL ADAPTIVE RULES (DETECT QUESTION TYPE FIRST):
+
+1. **TYPE 1: MULTIPLE CHOICE QUESTIONS (PILIHAN GANDA) — Matematika, Logika, CS Theory, Aptitude (A, B, C, D, dsb.):**
+   - **LINE 1 MUST BE THE CORRECT OPTION**: Directly state the final chosen answer in bold on the very first line:
+     **Jawaban: [Option Letter]. [Option Text/Value]** (contoh: **Jawaban: B. 42** atau **Jawaban: C. O(n log n)**).
+   - **CONCISE CALCULATION / REASONING**: Underneath the first line, provide 2-4 brief, clear steps explaining the math calculation, formula, or logic.
+   - **STRICTLY NO PROGRAMMING CODE**: DO NOT output Python/JavaScript/any programming code for math or conceptual MCQs! Give direct math steps and the answer option.
+
+2. **TYPE 2: HANDS-ON CODING & ALGORITHM PROBLEMS (Membuat Fungsi, Implementasi, Coding Test):**
+   - **CODE FIRST & END-TO-END COMPLETE**: Output the complete, working, optimal solution CODE IMMEDIATELY at the very top in a standard markdown code block.
+   - **MUST INCLUDE TEST/DRIVER EXECUTION**: The code block MUST be completely end-to-end:
+     * Full function / class implementation.
+     * Sample input variable declaration (matching the question's example).
+     * Function call and print statement (e.g. `console.log(...)`, `print(...)`, `fmt.Println(...)`) displaying the expected output so the candidate can run/verify immediately.
+   - **NO CONVERSATIONAL FLUFF**: Do NOT start with phrases like 'Saya akan...', 'Berikut adalah solusinya...'. Start directly with the code block.
+   - **BRIEF BULLETS BELOW**: Underneath the code block, provide at most 2-3 concise bullet points explaining key algorithm logic and time/space complexity O(...).
+
+3. **TYPE 3: CONCEPTUAL, SYSTEM DESIGN, OR BEHAVIORAL INTERVIEW QUESTIONS:**
+   - Speak in the first person ('Saya' / 'I') as the candidate using the candidate background below.
+   - Provide 2-4 high-density, concise bullet points or structured explanations.
+
+4. **LANGUAGE**: Always match the question's language (Bahasa Indonesia if in Indonesian, English if in English).";
+
     let system_content = if let Some(context) = vault_context {
         format!(
-            "You are the candidate / professional in a live job interview or meeting. You are speaking directly in the first person ('Saya' / 'I'). NEVER introduce yourself as an AI, bot, virtual assistant, or third party. Answer questions directly as yourself with concise, high-density talking points and bullet points (2-4 bullet points). Always answer in the same language as the question (e.g., Bahasa Indonesia if asked in Indonesian, English if asked in English).\n\n{}\n\n--- RELEVANT NOTES FROM YOUR PERSONAL KNOWLEDGE VAULT ---\n{}\n--------------------------------------------------------",
-            core_profile, context
+            "You are an expert technical copilot and problem solver assisting a candidate in a live assessment, technical test, or interview.\n\
+            \n\
+            {}\n\
+            \n\
+            {}\n\
+            \n\
+            --- RELEVANT NOTES FROM YOUR PERSONAL KNOWLEDGE VAULT ---\n\
+            {}\n\
+            --------------------------------------------------------",
+            prompt_rules, core_profile, context
         )
     } else {
         format!(
-            "You are the candidate / professional in a live job interview or meeting. You are speaking directly in the first person ('Saya' / 'I'). NEVER introduce yourself as an AI, bot, virtual assistant, or third party. Answer questions directly as yourself with concise, high-density talking points and bullet points (2-4 bullet points). Always answer in the same language as the question (e.g., Bahasa Indonesia if asked in Indonesian, English if asked in English).\n\n{}",
-            core_profile
+            "You are an expert technical copilot and problem solver assisting a candidate in a live assessment, technical test, or interview.\n\
+            \n\
+            {}\n\
+            \n\
+            {}",
+            prompt_rules, core_profile
         )
     };
 
@@ -562,6 +632,457 @@ pub async fn call_openrouter_ai(
                 raw_text
             ),
         ))
+    }
+}
+
+/// Helper untuk memanggil OpenRouter Vision AI dengan tangkapan layar (multimodal payload).
+pub async fn call_openrouter_vision_ai(
+    client: &reqwest::Client,
+    key: &str,
+    image_data_url: &str,
+    vault_context: Option<&str>,
+) -> Result<String, (Option<reqwest::StatusCode>, String)> {
+    #[derive(Serialize)]
+    #[serde(tag = "type")]
+    enum ContentPart {
+        #[serde(rename = "text")]
+        Text { text: String },
+        #[serde(rename = "image_url")]
+        ImageUrl { image_url: ImageUrlObj },
+    }
+
+    #[derive(Serialize)]
+    struct ImageUrlObj {
+        url: String,
+    }
+
+    #[derive(Serialize)]
+    #[serde(untagged)]
+    enum MessageContent {
+        Text(String),
+        Parts(Vec<ContentPart>),
+    }
+
+    #[derive(Serialize)]
+    struct VisionMessage {
+        role: String,
+        content: MessageContent,
+    }
+
+    #[derive(Serialize)]
+    struct OpenRouterVisionRequest {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        models: Option<Vec<String>>,
+        messages: Vec<VisionMessage>,
+    }
+
+    let core_profile = "\
+### CANDIDATE CORE IDENTITY & BACKGROUND:
+- **Name**: Ahmad Dhani Setiawan
+- **Role**: Fullstack Software Engineer
+- **Core Tech Stack**: TypeScript, JavaScript, Go, Python, PHP, Next.js, React, Angular, NestJS, Laravel, FastAPI, PostgreSQL, MySQL, Redis, Docker, Vitest, Playwright.
+- **Flagship Projects**:
+  1. **Klinik RME** (Go, sqlc, Angular 21, PostgreSQL, WebSocket) — Electronic Medical Record & Queue System with pessimistic row locking (`FOR UPDATE SKIP LOCKED`) and SHA-256 tamper-evident audit trail.
+  2. **Attendance & Workforce Management** (NestJS, Python FastAPI, PostgreSQL) — Spoof-resistant attendance with DeepFace AI facial verification and Haversine GPS geofencing.
+  3. **Vehicle Booking Management** (Laravel 11, PostgreSQL) — Fleet reservation with 2-tier state machine approval and schedule collision prevention.
+  4. **Fishing Pond POS** (CodeIgniter 4, MySQL) — Point of Sale with dynamic duration billing and ESC/POS thermal printing.
+- **Communication Style**: First-person ('Saya' / 'I'), concise, confident, structured (2-4 bullet points or short paragraphs), grounded in real technical facts.";
+
+    let prompt_rules = "\
+### CRITICAL ADAPTIVE RULES (DETECT QUESTION TYPE FROM SCREEN FIRST):
+
+1. **TYPE 1: MULTIPLE CHOICE QUESTIONS (PILIHAN GANDA) — Matematika, Logika, CS Theory, Aptitude (A, B, C, D, dsb.):**
+   - **LINE 1 MUST BE THE CORRECT OPTION**: Directly state the final chosen answer in bold on the very first line:
+     **Jawaban: [Option Letter]. [Option Text/Value]** (contoh: **Jawaban: B. 42** atau **Jawaban: C. O(n log n)**).
+   - **CONCISE CALCULATION / REASONING**: Underneath the first line, provide 2-4 brief, clear steps explaining the math calculation, formula, or logic.
+   - **STRICTLY NO PROGRAMMING CODE**: DO NOT output Python/JavaScript/any programming code for math or conceptual MCQs! Give direct math steps and the answer option.
+
+2. **TYPE 2: HANDS-ON CODING & ALGORITHM PROBLEMS (Membuat Fungsi, Implementasi, Coding Test):**
+   - **CODE FIRST & END-TO-END COMPLETE**: Output the complete, optimal, bug-free solution CODE IMMEDIATELY at the very top in a standard markdown code block.
+   - **MUST INCLUDE TEST/DRIVER EXECUTION**: The code block MUST be completely end-to-end:
+     * Full function / class implementation.
+     * Sample input variable declaration (matching the question's example).
+     * Function call and print statement (e.g. `console.log(...)`, `print(...)`, `fmt.Println(...)`) displaying the expected output so the candidate can run/verify immediately.
+   - **NO CONVERSATIONAL FLUFF**: Do NOT start with phrases like 'Saya akan...', 'Berikut adalah kodenya...'. Start directly with the code block.
+   - **BRIEF BULLETS BELOW**: Underneath the code block, provide 2-3 concise bullet points explaining key algorithm logic, edge cases, and time/space complexity.
+
+3. **TYPE 3: CONCEPTUAL, SYSTEM DESIGN, OR BEHAVIORAL INTERVIEW QUESTIONS:**
+   - Speak in the first person ('Saya' / 'I') as the candidate using the candidate background below.
+   - Provide 2-4 high-density, concise bullet points or structured explanations.
+
+4. **LANGUAGE**: Always match the question's language (Bahasa Indonesia if in Indonesian, English if in English).";
+
+    let system_content = if let Some(context) = vault_context {
+        format!(
+            "You are an expert technical copilot and problem solver assisting a candidate in a live assessment or exam.\n\
+            Carefully inspect the screen capture, detect the exact question type, and solve it accurately.\n\
+            \n\
+            {}\n\
+            \n\
+            {}\n\
+            \n\
+            --- RELEVANT NOTES FROM YOUR PERSONAL KNOWLEDGE VAULT ---\n\
+            {}\n\
+            --------------------------------------------------------",
+            prompt_rules, core_profile, context
+        )
+    } else {
+        format!(
+            "You are an expert technical copilot and problem solver assisting a candidate in a live assessment or exam.\n\
+            Carefully inspect the screen capture, detect the exact question type, and solve it accurately.\n\
+            \n\
+            {}\n\
+            \n\
+            {}",
+            prompt_rules, core_profile
+        )
+    };
+
+    let request_payload = OpenRouterVisionRequest {
+        model: None,
+        models: Some(vec![
+            "nex-agi/nex-n2.5-pro:free".to_string(),
+            "google/gemma-4-26b-a4b-it:free".to_string(),
+            "dots-studio/dots-3-note-preview:free".to_string(),
+        ]),
+        messages: vec![
+            VisionMessage {
+                role: "system".to_string(),
+                content: MessageContent::Text(system_content),
+            },
+            VisionMessage {
+                role: "user".to_string(),
+                content: MessageContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "Tolong analisis dan selesaikan soal pada tangkapan layar ini. Jika soal pilihan ganda (MCQ) seperti matematika atau teori, langsung tentukan opsi jawaban yang benar (contoh: **Jawaban: B. 42**) beserta langkah singkatnya. Jika soal coding/pemrograman, berikan kode solusi lengkap end-to-end.".to_string(),
+                    },
+                    ContentPart::ImageUrl {
+                        image_url: ImageUrlObj {
+                            url: image_data_url.to_string(),
+                        },
+                    },
+                ]),
+            },
+        ],
+    };
+
+    let response = client
+        .post(get_openrouter_endpoint())
+        .bearer_auth(key)
+        .header(
+            "HTTP-Referer",
+            "https://github.com/danisetiawan31/overlay-screen-tools",
+        )
+        .header("X-Title", "Screen Overlay Tool")
+        .json(&request_payload)
+        .send()
+        .await
+        .map_err(|e| (e.status(), format!("Network error OpenRouter Vision: {}", e)))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let err_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Gagal membaca body error".to_string());
+        return Err((Some(status), err_body));
+    }
+
+    let raw_text = response.text().await.map_err(|e| {
+        let msg = if e.is_timeout() {
+            "Waktu tunggu AI habis (>90 detik). Server model Vision OpenRouter sedang sibuk atau antre.".to_string()
+        } else {
+            format!("Gagal membaca body response OpenRouter Vision: {}", e)
+        };
+        (Some(status), msg)
+    })?;
+
+    let json_val: serde_json::Value = serde_json::from_str(&raw_text)
+        .map_err(|e| (Some(status), format!("Gagal parse JSON OpenRouter Vision: {}", e)))?;
+
+    if let Some(content) = json_val
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+    {
+        Ok(content.to_string())
+    } else if let Some(err_msg) = json_val
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+    {
+        Err((Some(status), format!("OpenRouter Vision error: {}", err_msg)))
+    } else {
+        Err((
+            Some(status),
+            format!(
+                "OpenRouter Vision mengembalikan response tidak terduga: {}",
+                raw_text
+            ),
+        ))
+    }
+}
+
+/// Fungsi terpusat untuk memicu tangkapan layar senyap dan analisis OpenRouter Vision AI.
+pub async fn trigger_screen_qa(app: &tauri::AppHandle) -> Result<(), String> {
+    let (openrouter_keys, current_gen, obsidian_vault_path) = {
+        let state = app.state::<Mutex<OverlayState>>();
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Ok(app_data_dir) = app.path().app_data_dir() {
+            if let Ok(fresh_cfg) = config::load_config(&app_data_dir) {
+                state_guard.config = Some(fresh_cfg);
+            }
+        }
+        state_guard.qa_generation += 1;
+        let gen = state_guard.qa_generation;
+        let cfg = state_guard
+            .config
+            .clone()
+            .ok_or_else(|| "Config belum dimuat di memori aplikasi".to_string())?;
+        (
+            cfg.openrouter_api_keys,
+            gen,
+            cfg.obsidian_vault_path,
+        )
+    };
+
+    println!("[SCREEN QA] Memicu silent screen capture & Vision AI (generasi: {})", current_gen);
+
+    // 1. Pindahkan tab UI ke Q&A dan tampilkan indikator proses
+    let _ = app.emit("qa:recording-started", ());
+    let _ = app.emit(
+        "transcript:result",
+        TranscriptResultPayload {
+            text: "📸 Menganalisis tangkapan layar...".to_string(),
+        },
+    );
+
+    // 2. Ambil screenshot layar di thread background agar tidak blocking
+    let jpeg_data_url = match tauri::async_runtime::spawn_blocking(move || {
+        screen::capture_screen_as_jpeg_data_url()
+    })
+    .await
+    {
+        Ok(Ok(url)) => url,
+        Ok(Err(err)) => {
+            eprintln!("[SCREEN QA ERROR] {}", err);
+            let _ = app.emit(
+                "qa:error",
+                QaErrorPayload {
+                    stage: "screen_capture".to_string(),
+                    message: err.clone(),
+                },
+            );
+            return Err(err);
+        }
+        Err(join_err) => {
+            let err_msg = format!("Task capture panic/join error: {}", join_err);
+            eprintln!("[SCREEN QA ERROR] {}", err_msg);
+            let _ = app.emit(
+                "qa:error",
+                QaErrorPayload {
+                    stage: "screen_capture".to_string(),
+                    message: err_msg.clone(),
+                },
+            );
+            return Err(err_msg);
+        }
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(90))
+        .build()
+        .map_err(|e| format!("Gagal inisialisasi HTTP client: {}", e))?;
+
+    let vault_context = if let Some(ref path_str) = obsidian_vault_path {
+        let path = std::path::Path::new(path_str);
+        match vault::scan_vault_markdown_files(path) {
+            Ok(docs) => vault::extract_relevant_context(&docs, "coding problem algorithm solution", 3000),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    // 3. Eksekusi request OpenRouter Vision dengan fallback keys
+    let answer_res = execute_fallback_keys(&openrouter_keys, |key| {
+        let key = key.to_string();
+        let client = client.clone();
+        let jpeg_data_url = jpeg_data_url.clone();
+        let vault_context = vault_context.clone();
+        async move {
+            call_openrouter_vision_ai(&client, &key, &jpeg_data_url, vault_context.as_deref()).await
+        }
+    })
+    .await;
+
+    // Discard jika ada request baru
+    if !is_qa_generation_current(app, current_gen) {
+        println!(
+            "[SCREEN QA] Request generasi {} sudah stale setelah Vision AI, discard answer.",
+            current_gen
+        );
+        return Ok(());
+    }
+
+    match answer_res {
+        Ok(ans) => {
+            let _ = app.emit("answer:result", AnswerResultPayload { text: ans });
+            Ok(())
+        }
+        Err(err_msg) => {
+            eprintln!("[SCREEN QA AI ERROR] {}", err_msg);
+            let _ = app.emit(
+                "qa:error",
+                QaErrorPayload {
+                    stage: "ai".to_string(),
+                    message: err_msg.clone(),
+                },
+            );
+            Err(err_msg)
+        }
+    }
+}
+
+/// Fungsi terpusat untuk memicu penyalinan teks seleksi secara senyap dan analisis OpenRouter Text AI (3 Model Utama).
+pub async fn trigger_selected_text_qa(app: &tauri::AppHandle) -> Result<(), String> {
+    let (openrouter_keys, current_gen, obsidian_vault_path) = {
+        let state = app.state::<Mutex<OverlayState>>();
+        let mut state_guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Ok(app_data_dir) = app.path().app_data_dir() {
+            if let Ok(fresh_cfg) = config::load_config(&app_data_dir) {
+                state_guard.config = Some(fresh_cfg);
+            }
+        }
+        state_guard.qa_generation += 1;
+        let gen = state_guard.qa_generation;
+        let cfg = state_guard
+            .config
+            .clone()
+            .ok_or_else(|| "Config belum dimuat di memori aplikasi".to_string())?;
+        (
+            cfg.openrouter_api_keys,
+            gen,
+            cfg.obsidian_vault_path,
+        )
+    };
+
+    println!(
+        "[SELECTED TEXT QA] Memicu silent highlight text capture & Text AI (generasi: {})",
+        current_gen
+    );
+
+    // 1. Pindahkan tab UI ke Q&A dan tampilkan indikator proses awal
+    let _ = app.emit("qa:recording-started", ());
+    let _ = app.emit(
+        "transcript:result",
+        TranscriptResultPayload {
+            text: "📋 Membaca teks yang disorot...".to_string(),
+        },
+    );
+
+    // 2. Ambil teks yang diseleksi di thread blocking agar tidak memblokir async runtime
+    let captured_text = match tauri::async_runtime::spawn_blocking(move || {
+        clipboard::capture_selected_text_silently()
+    })
+    .await
+    {
+        Ok(Ok(text)) => text,
+        Ok(Err(err)) => {
+            eprintln!("[SELECTED TEXT QA ERROR] {}", err);
+            let _ = app.emit(
+                "qa:error",
+                QaErrorPayload {
+                    stage: "clipboard".to_string(),
+                    message: err.clone(),
+                },
+            );
+            return Err(err);
+        }
+        Err(join_err) => {
+            let err_msg = format!("Task capture panic/join error: {}", join_err);
+            eprintln!("[SELECTED TEXT QA ERROR] {}", err_msg);
+            let _ = app.emit(
+                "qa:error",
+                QaErrorPayload {
+                    stage: "clipboard".to_string(),
+                    message: err_msg.clone(),
+                },
+            );
+            return Err(err_msg);
+        }
+    };
+
+    // 3. Tampilkan teks pertanyaan asli yang berhasil disorot di panel Q&A
+    let _ = app.emit(
+        "transcript:result",
+        TranscriptResultPayload {
+            text: captured_text.clone(),
+        },
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Gagal inisialisasi HTTP client: {}", e))?;
+
+    let vault_context = if let Some(ref path_str) = obsidian_vault_path {
+        let path = std::path::Path::new(path_str);
+        match vault::scan_vault_markdown_files(path) {
+            Ok(docs) => vault::extract_relevant_context(&docs, &captured_text, 3000),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    // 4. Eksekusi request ke 3 model teks utama via execute_fallback_keys & call_openrouter_ai
+    let answer_res = execute_fallback_keys(&openrouter_keys, |key| {
+        let key = key.to_string();
+        let client = client.clone();
+        let prompt_text = captured_text.clone();
+        let vault_context = vault_context.clone();
+        async move {
+            call_openrouter_ai(&client, &key, &prompt_text, vault_context.as_deref()).await
+        }
+    })
+    .await;
+
+    // Discard jika ada request baru
+    if !is_qa_generation_current(app, current_gen) {
+        println!(
+            "[SELECTED TEXT QA] Request generasi {} sudah stale setelah AI, discard answer.",
+            current_gen
+        );
+        return Ok(());
+    }
+
+    match answer_res {
+        Ok(ans) => {
+            let _ = app.emit("answer:result", AnswerResultPayload { text: ans });
+            Ok(())
+        }
+        Err(err_msg) => {
+            eprintln!("[SELECTED TEXT QA AI ERROR] {}", err_msg);
+            let _ = app.emit(
+                "qa:error",
+                QaErrorPayload {
+                    stage: "ai".to_string(),
+                    message: err_msg.clone(),
+                },
+            );
+            Err(err_msg)
+        }
     }
 }
 
@@ -1130,6 +1651,9 @@ pub fn run() {
             commands::close_notes_file,
             commands::send_audio_blob,
             commands::ask_ai_text,
+            commands::ask_ai_screen,
+            commands::ask_ai_selected_text,
+            commands::copy_to_clipboard,
             commands::test_trigger_hotkey
         ])
         .events(collect_events![
@@ -1152,7 +1676,10 @@ pub fn run() {
             commands::set_active_notes_file,
             commands::close_notes_file,
             commands::send_audio_blob,
-            commands::ask_ai_text
+            commands::ask_ai_text,
+            commands::ask_ai_screen,
+            commands::ask_ai_selected_text,
+            commands::copy_to_clipboard
         ])
         .events(collect_events![
             ConfigErrorPayload,
@@ -1174,6 +1701,10 @@ pub fn run() {
 
     let f8_shortcut = Shortcut::new(None, Code::F8);
     let f9_shortcut = Shortcut::new(None, Code::F9);
+    let f7_shortcut = Shortcut::new(None, Code::F7);
+    let ctrl_f8_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::F8);
+    let ctrl_f7_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::F7);
+    let f6_shortcut = Shortcut::new(None, Code::F6);
 
     if let Err(err) = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1183,6 +1714,26 @@ pub fn run() {
                 .with_handler(move |app, shortcut, event| {
                     if shortcut == &f9_shortcut && event.state() == ShortcutState::Pressed {
                         toggle_overlay_visibility(app);
+                    } else if shortcut == &f6_shortcut && event.state() == ShortcutState::Pressed {
+                        let _ = app.emit("tab:toggle", ());
+                    } else if (shortcut == &f7_shortcut || shortcut == &ctrl_f8_shortcut)
+                        && event.state() == ShortcutState::Pressed
+                    {
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(err) = trigger_screen_qa(&app_handle).await {
+                                eprintln!("[SCREEN QA ERROR] {}", err);
+                            }
+                        });
+                    } else if shortcut == &ctrl_f7_shortcut
+                        && event.state() == ShortcutState::Pressed
+                    {
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(err) = trigger_selected_text_qa(&app_handle).await {
+                                eprintln!("[SELECTED TEXT QA ERROR] {}", err);
+                            }
+                        });
                     } else if shortcut == &f8_shortcut {
                         match event.state() {
                             ShortcutState::Pressed => {
@@ -1355,7 +1906,6 @@ pub fn run() {
 
             let _ = window.set_always_on_top(true);
             let _ = window.show();
-            let _ = window.set_focus();
 
             let hwnd_raw = match window.hwnd() {
                 Ok(h) => h.0 as isize,
@@ -1626,6 +2176,19 @@ pub fn run() {
                     state_guard.qa_available = true;
                     println!("[HOTKEY] F8 shortcut terdaftar - siap digunakan");
                 }
+
+                // Registrasi F7 & Ctrl+F8 (Silent Screen Capture to Vision AI)
+                let _ = app.global_shortcut().register(f7_shortcut);
+                let _ = app.global_shortcut().register(ctrl_f8_shortcut);
+                println!("[HOTKEY] F7 & Ctrl+F8 (Silent Screen QA) shortcuts terdaftar - siap digunakan");
+
+                // Registrasi Ctrl+F7 (Silent Selected Text QA ke 3 Model Teks Utama)
+                let _ = app.global_shortcut().register(ctrl_f7_shortcut);
+                println!("[HOTKEY] Ctrl+F7 (Silent Selected Text QA) shortcut terdaftar - siap digunakan");
+
+                // Registrasi F6 (Toggle Tab Notes <-> Live Q&A)
+                let _ = app.global_shortcut().register(f6_shortcut);
+                println!("[HOTKEY] F6 (Toggle Tab) shortcut terdaftar - siap digunakan");
             }
 
             // 7. Auto-restore notes file jika tersimpan di config

@@ -76,6 +76,11 @@ describe("QaPanel Component", () => {
       data: null,
     });
 
+    vi.spyOn(commands, "copyToClipboard").mockResolvedValue({
+      status: "ok",
+      data: null,
+    });
+
     mockRecorderInstance = {
       start: vi.fn(() => {
         mockRecorderInstance.state = "recording";
@@ -348,6 +353,31 @@ describe("QaPanel Component", () => {
     });
 
     expect(commands.askAiText).not.toHaveBeenCalled();
+  });
+
+  it("14. renders Salin Jawaban button when answer is available and invokes copyToClipboard", async () => {
+    render(<QaPanel qaAvailable={true} />);
+
+    // Simulasikan jawaban tiba
+    await act(async () => {
+      if (answerResultCb) {
+        answerResultCb({
+          payload: { text: "```javascript\nconsole.log('test');\n```" },
+        });
+      }
+    });
+
+    const copyAnswerBtn = screen.getByRole("button", { name: "Salin jawaban" });
+    expect(copyAnswerBtn).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(copyAnswerBtn);
+    });
+
+    expect(commands.copyToClipboard).toHaveBeenCalledWith({
+      text: "```javascript\nconsole.log('test');\n```",
+    });
+    expect(screen.getByText("Tersalin!")).toBeInTheDocument();
   });
 });
 

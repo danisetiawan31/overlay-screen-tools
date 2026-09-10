@@ -59,6 +59,12 @@ pub struct AskAiTextArgs {
     pub prompt: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyToClipboardArgs {
+    pub text: String,
+}
+
 
 #[cfg(debug_assertions)]
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
@@ -326,10 +332,15 @@ pub async fn send_audio_blob(args: SendAudioBlobArgs, app: tauri::AppHandle) -> 
 
     let (groq_keys, openrouter_keys, current_gen, obsidian_vault_path) = {
         let state = app.state::<Mutex<OverlayState>>();
-        let state_guard = match state.lock() {
+        let mut state_guard = match state.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
+        if let Ok(app_data_dir) = app.path().app_data_dir() {
+            if let Ok(fresh_cfg) = crate::config::load_config(&app_data_dir) {
+                state_guard.config = Some(fresh_cfg);
+            }
+        }
         let cfg = state_guard
             .config
             .clone()
@@ -470,6 +481,11 @@ pub async fn ask_ai_text(args: AskAiTextArgs, app: tauri::AppHandle) -> Result<(
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
+        if let Ok(app_data_dir) = app.path().app_data_dir() {
+            if let Ok(fresh_cfg) = crate::config::load_config(&app_data_dir) {
+                state_guard.config = Some(fresh_cfg);
+            }
+        }
         state_guard.qa_generation += 1;
         let gen = state_guard.qa_generation;
         let cfg = state_guard
@@ -563,6 +579,18 @@ pub async fn ask_ai_text(args: AskAiTextArgs, app: tauri::AppHandle) -> Result<(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn ask_ai_screen(app: tauri::AppHandle) -> Result<(), String> {
+    crate::trigger_screen_qa(&app).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn ask_ai_selected_text(app: tauri::AppHandle) -> Result<(), String> {
+    crate::trigger_selected_text_qa(&app).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_app_state(state: tauri::State<Mutex<OverlayState>>) -> Result<AppState, String> {
     let state_guard = match state.lock() {
         Ok(guard) => guard,
@@ -612,6 +640,20 @@ pub fn test_trigger_hotkey(
             "Kombinasi hotkey/state simulasi tidak valid (didukung: F9 Pressed, F8 Pressed/Released)"
                 .to_string(),
         ),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn copy_to_clipboard(args: CopyToClipboardArgs) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        crate::clipboard::set_clipboard_text(&args.text)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = args;
+        Err("Clipboard copy hanya didukung di Windows".to_string())
     }
 }
 

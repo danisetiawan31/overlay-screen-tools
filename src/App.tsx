@@ -86,6 +86,37 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  // Listen event tab:toggle (F6) untuk bolak-balik antara tab Notes dan Live Q&A
+  useEffect(() => {
+    let isMounted = true;
+    let unlistenFn: (() => void) | undefined;
+
+    listen("tab:toggle", () => {
+      if (isMounted) {
+        setActiveTab((prev) => {
+          if (prev === "notes") {
+            return qaAvailableRef.current ? "qa" : "notes";
+          } else {
+            return "notes";
+          }
+        });
+      }
+    }).then((unlisten) => {
+      if (!isMounted) {
+        unlisten();
+      } else {
+        unlistenFn = unlisten;
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      if (unlistenFn) {
+        unlistenFn();
+      }
+    };
+  }, []);
+
   const handleUpdateFontSize = async (newSize: number) => {
     setFontSize(newSize);
     try {
