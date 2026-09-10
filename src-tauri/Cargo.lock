@@ -2886,7 +2886,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-notification",
  "tauri-specta",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "webview2-com 0.39.1",
  "windows-sys 0.61.2",
 ]
