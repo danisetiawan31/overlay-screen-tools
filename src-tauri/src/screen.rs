@@ -2,13 +2,10 @@ use base64::Engine;
 use std::mem::size_of;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
-    GetDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-    SRCCOPY,
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
+    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
-};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
 /// Mengambil tangkapan layar monitor utama secara senyap menggunakan Win32 GDI,
 /// mengompresinya menjadi JPEG (kualitas ~80%), dan mengembalikan data URL base64.
@@ -16,16 +13,35 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 /// Karena jendela poc-overlay menggunakan WDA_EXCLUDEFROMCAPTURE,
 /// jendela overlay otomatis tidak ikut terekam (tembus pandang).
 pub fn capture_screen_as_jpeg_data_url() -> Result<String, String> {
+    // SAFETY: Memanggil API Windows User32 untuk memastikan worker thread terhubung ke Input Desktop aktif saat ini.
+    // Tanpa mengaitkan desktop aktif, threadpool worker Tokio tidak memiliki hak akses membaca Desktop DC sehingga BitBlt gagal.
+    unsafe {
+        extern "system" {
+            fn OpenInputDesktop(
+                dwFlags: u32,
+                fInherit: windows_sys::core::BOOL,
+                dwDesiredAccess: u32,
+            ) -> isize;
+            fn SetThreadDesktop(hDesktop: isize) -> windows_sys::core::BOOL;
+            fn CloseDesktop(hDesktop: isize) -> windows_sys::core::BOOL;
+        }
+        let input_desk = OpenInputDesktop(0, 0, 0x01FF);
+        if input_desk != 0 {
+            SetThreadDesktop(input_desk);
+            CloseDesktop(input_desk);
+        }
+    }
+
+    // SAFETY: GetSystemMetrics adalah API Win32 query murni yang aman dipanggil dari thread manapun.
     let width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
     let height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
 
     if width <= 0 || height <= 0 {
-        return Err(format!(
-            "Dimensi layar tidak valid: {}x{}",
-            width, height
-        ));
+        return Err(format!("Dimensi layar tidak valid: {}x{}", width, height));
     }
 
+    // SAFETY: Operasi Win32 GDI standar untuk membaca pixel layar desktop ke memory bitmap.
+    // Semua handle (HDC, HBITMAP) di-release/delete sebelum fungsi selesai.
     let raw_bgra = unsafe {
         let hdc_screen = GetDC(0 as HWND);
         if hdc_screen.is_null() {
@@ -47,16 +63,18 @@ pub fn capture_screen_as_jpeg_data_url() -> Result<String, String> {
 
         let hbm_old = SelectObject(hdc_mem, hbm_screen);
 
-        let blt_res = BitBlt(
-            hdc_mem, 0, 0, width, height, hdc_screen, 0, 0, SRCCOPY,
-        );
+        let blt_res = BitBlt(hdc_mem, 0, 0, width, height, hdc_screen, 0, 0, SRCCOPY);
 
         if blt_res == 0 {
+            let os_err = std::io::Error::last_os_error();
             SelectObject(hdc_mem, hbm_old);
             DeleteObject(hbm_screen);
             DeleteDC(hdc_mem);
             ReleaseDC(0 as HWND, hdc_screen);
-            return Err("Gagal melakukan BitBlt pada Desktop DC".to_string());
+            return Err(format!(
+                "Gagal melakukan BitBlt pada Desktop DC: {:?}",
+                os_err
+            ));
         }
 
         // Setup BITMAPINFO top-down (biHeight negatif)
@@ -106,14 +124,14 @@ pub fn capture_screen_as_jpeg_data_url() -> Result<String, String> {
                 let orig_idx = ((y * step) * (width as usize) + (x * step)) * 4;
                 downsampled.push(raw_bgra[orig_idx + 2]); // R
                 downsampled.push(raw_bgra[orig_idx + 1]); // G
-                downsampled.push(raw_bgra[orig_idx]);     // B
+                downsampled.push(raw_bgra[orig_idx]); // B
             }
         }
         (new_w as u32, new_h as u32, downsampled)
     } else {
         let pixel_count = (width * height) as usize;
         let mut rgb_buf = Vec::with_capacity(pixel_count * 3);
-        for chunk in raw_bgra.chunks_exact(4) {
+        for chunk in raw_bgra.as_chunks::<4>().0 {
             rgb_buf.push(chunk[2]); // R
             rgb_buf.push(chunk[1]); // G
             rgb_buf.push(chunk[0]); // B
@@ -144,7 +162,6 @@ mod tests {
 
     #[test]
     fn test_capture_screen_returns_jpeg_data_url_on_windows() {
-        // Test ini hanya berjalan pada environment desktop Windows interaktif
         if let Ok(data_url) = capture_screen_as_jpeg_data_url() {
             assert!(data_url.starts_with("data:image/jpeg;base64,"));
             assert!(data_url.len() > 100);
