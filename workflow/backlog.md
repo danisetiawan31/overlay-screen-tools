@@ -19,4 +19,4 @@ Fitur diturunkan dari `docs/PRD.md` Section 3 & 4. Status tracking (progress per
 - [ ] Scrollable/persistent history Q&A dalam satu sesi
 - [ ] Dukungan platform selain Windows 11
 - [ ] Ghost Mode (click-through overlay)
-- [ ] Packaging jadi installer `.exe`
+- [x] Packaging jadi installer `.exe` (NSIS Setup 2.46 MB & MSI 3.03 MB) dan standalone binary mini (4.82 MB)
