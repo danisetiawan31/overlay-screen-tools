@@ -22,7 +22,7 @@ export const DocumentTabBar: React.FC<DocumentTabBarProps> = ({
   return (
     <div
       role="tablist"
-      aria-label="Document tabs"
+      aria-label="Document tabs (Ctrl+F10 untuk ganti tab)"
       className="flex items-center gap-1 overflow-x-auto py-1 px-0.5 select-none"
     >
       {documents.map((doc) => {
@@ -40,16 +40,16 @@ export const DocumentTabBar: React.FC<DocumentTabBarProps> = ({
                 onSelectTab(doc.path);
               }
             }}
-            title={doc.path}
+            title={`${doc.path} (Ctrl+F10 untuk ganti tab)`}
             className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all cursor-pointer border shrink-0 max-w-[180px] ${
               isActive
-                ? "bg-zinc-800 text-zinc-100 border-zinc-700 shadow-sm font-medium"
-                : "bg-zinc-900/50 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border-zinc-800/60"
+                ? "bg-[#28282d] text-[#fafafa] border-[#38383e] shadow-xs font-medium"
+                : "bg-[#222225]/70 text-[#a1a1aa] hover:text-[#fafafa] hover:bg-[#28282d]/50 border-[#2e2e32]"
             }`}
           >
             <FileText
               className={`w-3.5 h-3.5 shrink-0 ${
-                isActive ? "text-amber-400" : "text-zinc-500 group-hover:text-zinc-400"
+                isActive ? "text-amber-400" : "text-[#71717a] group-hover:text-[#a1a1aa]"
               }`}
             />
             <span className="truncate">{doc.title}</span>
@@ -60,7 +60,7 @@ export const DocumentTabBar: React.FC<DocumentTabBarProps> = ({
                 e.stopPropagation();
                 onCloseTab(doc.path);
               }}
-              className="p-0.5 -mr-1 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-200 transition-colors"
+              className="p-0.5 -mr-1 rounded hover:bg-[#38383e] text-[#71717a] hover:text-[#fafafa] transition-colors"
             >
               <X className="w-3 h-3" />
             </button>
@@ -74,7 +74,7 @@ export const DocumentTabBar: React.FC<DocumentTabBarProps> = ({
         disabled={isPicking}
         aria-label="Buka dokumen baru"
         title="Buka file Markdown baru (+)"
-        className="flex items-center justify-center w-6 h-6 rounded-md bg-zinc-900/60 hover:bg-zinc-800 active:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-800/80 transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="flex items-center justify-center w-6 h-6 rounded-md bg-[#28282d] hover:bg-[#34343a] active:bg-[#3f3f46] text-[#a1a1aa] hover:text-[#fafafa] border border-[#38383e] shadow-2xs transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <Plus className="w-3.5 h-3.5" />
       </button>

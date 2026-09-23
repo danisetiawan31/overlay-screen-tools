@@ -24,8 +24,8 @@ export const TabNav: React.FC<TabNavProps> = ({
         onClick={() => onTabChange("notes")}
         className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors border-b-2 ${
           activeTab === "notes"
-            ? "border-emerald-500 text-zinc-100 bg-zinc-800/80"
-            : "border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+            ? "border-emerald-500 text-[#fafafa] bg-[#28282d] font-semibold"
+            : "border-transparent text-[#a1a1aa] hover:text-[#fafafa] hover:bg-[#28282d]/50"
         }`}
       >
         Notes
@@ -45,15 +45,15 @@ export const TabNav: React.FC<TabNavProps> = ({
         }}
         className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors border-b-2 ${
           !qaAvailable
-            ? "border-transparent text-zinc-600 opacity-40 cursor-not-allowed"
+            ? "border-transparent text-[#52525b] opacity-40 cursor-not-allowed"
             : activeTab === "qa"
-            ? "border-emerald-500 text-zinc-100 bg-zinc-800/80"
-            : "border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+            ? "border-emerald-500 text-[#fafafa] bg-[#28282d] font-semibold"
+            : "border-transparent text-[#a1a1aa] hover:text-[#fafafa] hover:bg-[#28282d]/50"
         }`}
       >
         Live Q&A
         {!qaAvailable && (
-          <span className="ml-1.5 text-[10px] px-1 py-0.2 rounded bg-zinc-800 text-zinc-500 border border-zinc-700/50">
+          <span className="ml-1.5 text-[10px] px-1 py-0.2 rounded bg-[#28282d] text-[#71717a] border border-[#38383e]">
             Off
           </span>
         )}

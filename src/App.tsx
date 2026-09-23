@@ -189,18 +189,18 @@ export const App: React.FC = () => {
   }, [fontSize]);
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-zinc-950 text-zinc-100 font-sans">
+    <div className="flex flex-col h-screen w-screen bg-[#1e1e20] text-[#d4d4d8] font-sans">
       {/* Unified Compact Top Bar: Tabs di kiri, Font Control & F9 Toggle di kanan */}
       <header
         data-tauri-drag-region
-        className="flex items-center justify-between px-3 pt-1 border-b border-zinc-800 bg-zinc-900/90 cursor-move select-none shrink-0"
+        className="flex items-center justify-between px-3 pt-1 border-b border-[#2e2e32] bg-[#1a1a1c] cursor-move select-none shrink-0"
       >
         {/* Sisi Kiri: Logo mini + Tab Navigation */}
         <div className="flex items-center space-x-2">
           <img
             src={appLogo}
             alt="App Logo"
-            className="w-3.5 h-3.5 rounded-sm object-contain opacity-70 mb-0.5 select-none pointer-events-none"
+            className="w-3.5 h-3.5 rounded-sm object-contain opacity-80 mb-0.5 select-none pointer-events-none"
           />
           <TabNav
             activeTab={activeTab}
@@ -217,21 +217,21 @@ export const App: React.FC = () => {
               onUpdateFontSize={handleUpdateFontSize}
             />
           )}
-          <div className="flex items-center space-x-1 text-xs text-zinc-500">
-            <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">F9</span>
+          <div className="flex items-center space-x-1 text-xs text-[#a1a1aa]">
+            <span className="px-1.5 py-0.5 rounded bg-[#28282d] border border-[#38383e] text-[#d4d4d8] font-mono">F9</span>
             <span>Toggle</span>
           </div>
         </div>
       </header>
 
       {error && (
-        <div role="alert" className="bg-red-950/80 border-b border-red-800/80 px-3 py-2 text-xs text-red-300 flex items-center justify-between shrink-0">
+        <div role="alert" className="bg-red-950/70 border-b border-red-800/80 px-3 py-2 text-xs text-red-300 flex items-center justify-between shrink-0">
           <span>Gagal memuat status aplikasi: {error}</span>
         </div>
       )}
 
       {updateError && (
-        <div role="alert" className="bg-red-950/80 border-b border-red-800/80 px-3 py-2 text-xs text-red-300 flex items-center justify-between shrink-0">
+        <div role="alert" className="bg-red-950/70 border-b border-red-800/80 px-3 py-2 text-xs text-red-300 flex items-center justify-between shrink-0">
           <span>Gagal mengubah ukuran font: {updateError}</span>
           <button
             type="button"
@@ -245,7 +245,7 @@ export const App: React.FC = () => {
       )}
 
       {isLoading ? (
-        <div className="flex-1 flex items-center justify-center text-xs text-zinc-500">
+        <div className="flex-1 flex items-center justify-center text-xs text-[#71717a]">
           <span>Memuat status aplikasi...</span>
         </div>
       ) : (

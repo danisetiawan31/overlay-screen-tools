@@ -366,9 +366,9 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
 
   if (!qaAvailable) {
     return (
-      <div className="h-full flex flex-col items-center justify-center p-6 text-center text-zinc-500 bg-zinc-900/30 rounded-lg border border-zinc-800/60">
-        <MicOff className="w-8 h-8 mb-2 text-zinc-600" />
-        <h3 className="font-semibold text-zinc-400 text-sm mb-1">Live Q&A Tidak Tersedia</h3>
+      <div className="h-full flex flex-col items-center justify-center p-6 text-center text-[#71717a] bg-[#1a1a1d]/50 rounded-lg border border-[#38383e]">
+        <MicOff className="w-8 h-8 mb-2 text-[#71717a]" />
+        <h3 className="font-semibold text-[#a1a1aa] text-sm mb-1">Live Q&A Tidak Tersedia</h3>
         <p className="text-xs max-w-sm">
           Hotkey F8 gagal didaftarkan pada sesi ini. Fitur push-to-talk dinonaktifkan secara otomatis.
         </p>
@@ -379,7 +379,7 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
   return (
     <div className="h-full flex flex-col space-y-3 overflow-hidden select-text">
       {/* Status Bar */}
-      <div className="flex items-center justify-between px-3 py-2 bg-zinc-900/60 rounded-md border border-zinc-800/80 text-xs">
+      <div className="flex items-center justify-between px-3 py-2 bg-[#28282d] rounded-md border border-[#38383e] text-xs">
         <div className="flex items-center space-x-2">
           {qaState.status === "recording" && (
             <span className="flex items-center space-x-1.5 text-red-400 font-medium animate-pulse">
@@ -400,9 +400,9 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
             </span>
           )}
           {qaState.status === "idle" && (
-            <span className="flex items-center space-x-1.5 text-zinc-400">
+            <span className="flex items-center space-x-1.5 text-[#a1a1aa]">
               <Mic className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Siap — Tahan <kbd className="px-1 py-0.5 bg-zinc-800 rounded border border-zinc-700 text-zinc-300 font-mono">F8</kbd> untuk bertanya</span>
+              <span>Siap — Tahan <kbd className="px-1 py-0.5 bg-[#1e1e20] rounded border border-[#38383e] text-[#d4d4d8] font-mono">F8</kbd> untuk bertanya</span>
             </span>
           )}
           {qaState.status === "error" && (
@@ -418,7 +418,7 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
       {qaState.error && (
         <div
           role="alert"
-          className="bg-red-950/80 border border-red-800/80 px-3 py-2 rounded text-xs text-red-300 flex items-start justify-between"
+          className="bg-red-950/70 border border-red-800/80 px-3 py-2 rounded text-xs text-red-300 flex items-start justify-between"
         >
           <div className="flex items-start space-x-2">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
@@ -438,17 +438,17 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
       {/* Main Q&A Content Area */}
       <div className="flex-1 flex flex-col space-y-3 overflow-hidden min-h-0">
         {/* Question Panel */}
-        <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-md p-3 shrink-0">
-          <div className="flex items-center space-x-1.5 text-xs font-semibold text-zinc-400 mb-1.5">
-            <MessageSquare className="w-3.5 h-3.5 text-zinc-500" />
+        <div className="bg-[#242428] border border-[#38383e] rounded-md p-3 shrink-0">
+          <div className="flex items-center space-x-1.5 text-xs font-semibold text-[#a1a1aa] mb-1.5">
+            <MessageSquare className="w-3.5 h-3.5 text-[#71717a]" />
             <span>Pertanyaan (Transkrip)</span>
           </div>
           {qaState.question ? (
-            <p className="text-zinc-200 text-sm font-medium leading-snug">
+            <p className="text-[#fafafa] text-sm font-medium leading-snug">
               {qaState.question}
             </p>
           ) : (
-            <p className="text-zinc-600 text-xs italic">
+            <p className="text-[#71717a] text-xs italic">
               Belum ada pertanyaan aktif. Ketik pertanyaan di bawah atau tahan tombol F8 untuk bicara.
             </p>
           )}
@@ -458,10 +458,10 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
         <div
           ref={answerContainerRef}
           onMouseUp={handleSelectionMouseUp}
-          className="relative flex-1 bg-zinc-900/40 border border-zinc-800/60 rounded-md p-3 overflow-y-auto min-h-0 select-text"
+          className="relative flex-1 bg-[#28282d] border border-[#38383e] rounded-md p-3 overflow-y-auto min-h-0 select-text"
         >
           <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center space-x-1.5 text-xs font-semibold text-zinc-400">
+            <div className="flex items-center space-x-1.5 text-xs font-semibold text-[#a1a1aa]">
               <Sparkles className="w-3.5 h-3.5 text-purple-400" />
               <span>Jawaban AI</span>
             </div>
@@ -469,7 +469,7 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
               <button
                 type="button"
                 onClick={handleCopyAnswer}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-200 hover:text-white text-xs font-medium transition border border-zinc-700/70 shadow-xs"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#34343a] hover:bg-[#404048] active:bg-[#4a4a52] text-[#d4d4d8] hover:text-white text-xs font-medium transition border border-[#3f3f46] shadow-xs"
                 title="Salin seluruh jawaban AI ke clipboard"
                 aria-label="Salin jawaban"
               >
@@ -488,7 +488,7 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
             )}
           </div>
           {qaState.answer ? (
-            <div className="markdown-body prose prose-invert max-w-none text-zinc-200 leading-relaxed text-sm break-words space-y-2 select-text [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-zinc-100 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-zinc-100 [&_h3]:text-xs [&_h3]:font-medium [&_h3]:text-zinc-200 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_table]:border-collapse [&_th]:border [&_th]:border-zinc-800 [&_th]:p-1.5 [&_td]:border [&_td]:border-zinc-800 [&_td]:p-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-purple-500 [&_blockquote]:pl-3 [&_blockquote]:text-zinc-400 [&_blockquote]:italic [&_p]:my-1.5">
+            <div className="markdown-body prose prose-invert max-w-none text-[#d4d4d8] leading-relaxed text-sm break-words space-y-2.5 select-text [&_strong]:text-white [&_strong]:font-bold [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-[#fafafa] [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-[#fafafa] [&_h3]:text-xs [&_h3]:font-medium [&_h3]:text-[#f4f4f5] [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_table]:border-collapse [&_th]:border [&_th]:border-[#38383e] [&_th]:p-1.5 [&_th]:bg-[#242428] [&_th]:text-[#fafafa] [&_td]:border [&_td]:border-[#38383e] [&_td]:p-1.5 [&_td]:text-[#d4d4d8] [&_blockquote]:border-l-[3px] [&_blockquote]:border-l-[#585862] [&_blockquote]:border-t-0 [&_blockquote]:border-r-0 [&_blockquote]:border-b-0 [&_blockquote]:bg-[#28282d] [&_blockquote]:px-4 [&_blockquote]:py-2.5 [&_blockquote]:rounded-r-md [&_blockquote]:my-2.5 [&_blockquote]:text-[#d4d4d8] [&_blockquote]:italic [&_p]:my-1.5">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeHighlight]}
@@ -498,12 +498,12 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
               </ReactMarkdown>
             </div>
           ) : qaState.status === "answering" ? (
-            <div className="flex items-center space-x-2 text-xs text-zinc-500 py-4 justify-center">
+            <div className="flex items-center space-x-2 text-xs text-[#71717a] py-4 justify-center">
               <Sparkles className="w-4 h-4 animate-spin text-purple-400" />
               <span>Memproses jawaban AI...</span>
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center h-32 text-center text-zinc-600 text-xs">
+            <div className="flex flex-col items-center justify-center h-32 text-center text-[#71717a] text-xs">
               <p>Jawaban ringkas AI akan ditampilkan di sini.</p>
             </div>
           )}
@@ -543,10 +543,10 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
         </div>
       )}
 
-      {/* Text Prompt Input Bar (Opsi 1 Single-line) */}
+      {/* Text Prompt Input Bar (Single-line) */}
       <form
         onSubmit={handleSubmitPrompt}
-        className="shrink-0 flex items-center gap-2 pt-1 border-t border-zinc-800/60"
+        className="shrink-0 flex items-center gap-2 pt-1 border-t border-[#2e2e32]"
       >
         <div className="relative flex-1">
           <input
@@ -555,7 +555,7 @@ export const QaPanel: React.FC<QaPanelProps> = ({ qaAvailable = true }) => {
             onChange={(e) => setPromptInput(e.target.value)}
             placeholder="Tanya AI atau tahan F8 untuk bicara..."
             disabled={isProcessing}
-            className="w-full bg-zinc-900/80 border border-zinc-700/70 focus:border-purple-500/80 focus:ring-1 focus:ring-purple-500/50 rounded-md px-3 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-500 outline-none transition disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full bg-[#242428] border border-[#38383e] focus:border-purple-500/80 focus:ring-1 focus:ring-purple-500/40 rounded-md px-3 py-1.5 text-xs text-[#fafafa] placeholder:text-[#71717a] outline-none transition disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Prompt pertanyaan AI"
           />
         </div>

@@ -19,18 +19,18 @@ export const FontSizeControl: React.FC<FontSizeControlProps> = ({
   const isAtMax = fontSize >= MAX_FONT_SIZE;
 
   return (
-    <div className="flex items-center space-x-1.5 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800/80 text-xs select-none">
-      <span className="text-zinc-500 text-[10px] uppercase font-semibold mr-0.5">Font</span>
+    <div className="flex items-center space-x-1.5 bg-[#28282d] px-2 py-0.5 rounded border border-[#38383e] text-xs select-none">
+      <span className="text-[#a1a1aa] text-[10px] uppercase font-semibold mr-0.5">Font</span>
       <button
         type="button"
         aria-label="Decrease font size"
         disabled={disabled || isAtMin}
         onClick={() => onUpdateFontSize(fontSize - 1)}
-        className="w-5 h-5 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-200 transition-colors font-bold text-xs"
+        className="w-5 h-5 flex items-center justify-center rounded bg-[#34343a] hover:bg-[#404048] active:bg-[#4a4a52] disabled:opacity-30 disabled:cursor-not-allowed text-[#fafafa] transition-colors font-bold text-xs border border-[#3f3f46]"
       >
         −
       </button>
-      <span className="text-xs font-mono text-zinc-300 min-w-[28px] text-center">
+      <span className="text-xs font-mono text-[#d4d4d8] min-w-[28px] text-center font-medium">
         {fontSize}px
       </span>
       <button
@@ -38,7 +38,7 @@ export const FontSizeControl: React.FC<FontSizeControlProps> = ({
         aria-label="Increase font size"
         disabled={disabled || isAtMax}
         onClick={() => onUpdateFontSize(fontSize + 1)}
-        className="w-5 h-5 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-200 transition-colors font-bold text-xs"
+        className="w-5 h-5 flex items-center justify-center rounded bg-[#34343a] hover:bg-[#404048] active:bg-[#4a4a52] disabled:opacity-30 disabled:cursor-not-allowed text-[#fafafa] transition-colors font-bold text-xs border border-[#3f3f46]"
       >
         +
       </button>
