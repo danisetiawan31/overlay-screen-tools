@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import React from "react";
+import ReactMarkdown from "react-markdown";
 import mermaid from "mermaid";
 import {
   MermaidRenderer,
@@ -170,6 +171,84 @@ describe("MermaidRenderer Component", () => {
     expect(writeTextSpy).not.toHaveBeenCalled();
 
     vi.unstubAllGlobals();
+  });
+
+  it("10. markdownComponents.blockquote renders GitHub Alert [!NOTE] as high-contrast callout card", () => {
+    const BlockquoteComp = markdownComponents.blockquote;
+    render(
+      React.createElement(BlockquoteComp, {
+        children: [
+          React.createElement("p", { key: "p1" }, "[!NOTE]\nIni pertanyaan wawancara penting"),
+          React.createElement("p", { key: "p2" }, "Paragraf kedua"),
+        ],
+      })
+    );
+
+    const alertRegion = screen.getByRole("region", { name: /note alert/i });
+    expect(alertRegion).toBeInTheDocument();
+    expect(alertRegion.className).toContain("border-l-sky-400");
+    expect(screen.getByText("Note")).toBeInTheDocument();
+    expect(screen.getByText(/Ini pertanyaan wawancara penting/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[!NOTE\]/)).not.toBeInTheDocument();
+  });
+
+  it("11. markdownComponents.blockquote renders GitHub Alert [!TIP] with emerald styling", () => {
+    const BlockquoteComp = markdownComponents.blockquote;
+    render(
+      React.createElement(BlockquoteComp, {
+        children: [
+          React.createElement("p", { key: "p1" }, "[!TIP] Gunakan STAR method"),
+        ],
+      })
+    );
+
+    const alertRegion = screen.getByRole("region", { name: /tip alert/i });
+    expect(alertRegion).toBeInTheDocument();
+    expect(alertRegion.className).toContain("border-l-emerald-400");
+    expect(screen.getByText("Tip")).toBeInTheDocument();
+    expect(screen.getByText(/Gunakan STAR method/)).toBeInTheDocument();
+  });
+
+  it("12. markdownComponents.blockquote renders standard blockquote when no alert tag is present", () => {
+    const BlockquoteComp = markdownComponents.blockquote;
+    const { container } = render(
+      React.createElement(BlockquoteComp, {
+        children: React.createElement("p", {}, "Ini kutipan biasa tanpa alert"),
+      })
+    );
+
+    expect(screen.queryByRole("region")).not.toBeInTheDocument();
+    const bq = container.querySelector("blockquote");
+    expect(bq).toBeInTheDocument();
+    expect(bq?.textContent).toContain("Ini kutipan biasa tanpa alert");
+  });
+
+  it("13. renders real ReactMarkdown document with > [!NOTE] callout and regular quote", () => {
+    const markdown = [
+      "> [!NOTE]",
+      "> ### 🎙️ PERTANYAAN PEWAWANCARA:",
+      '> *"Kenapa memilih magang, bukan langsung melamar kerja full-time?"*',
+      "",
+      "#### Skrip Jawaban:",
+      '> "Sebagai fresh graduate S1 Sistem Informasi..."',
+    ].join("\n");
+
+    const { container } = render(
+      React.createElement(ReactMarkdown, { components: markdownComponents, children: markdown })
+    );
+
+    // Callout alert container
+    const alertRegion = screen.getByRole("region", { name: /note alert/i });
+    expect(alertRegion).toBeInTheDocument();
+    expect(alertRegion.className).toContain("border-l-sky-400");
+    expect(screen.getByText("Note")).toBeInTheDocument();
+    expect(screen.getByText(/PERTANYAAN PEWAWANCARA/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[!NOTE\]/)).not.toBeInTheDocument();
+
+    // Regular quote is standard blockquote
+    const bq = container.querySelector("blockquote");
+    expect(bq).toBeInTheDocument();
+    expect(bq?.textContent).toContain("Sebagai fresh graduate S1");
   });
 });
 

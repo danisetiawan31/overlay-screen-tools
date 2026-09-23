@@ -1,6 +1,14 @@
 import React, { useEffect, useState } from "react";
 import mermaid from "mermaid";
-import { Copy, Check } from "lucide-react";
+import {
+  Copy,
+  Check,
+  Info,
+  Lightbulb,
+  AlertCircle,
+  AlertTriangle,
+  OctagonAlert,
+} from "lucide-react";
 import { commands } from "../bindings";
 
 mermaid.initialize({
@@ -70,7 +78,7 @@ export const MermaidRenderer: React.FC<MermaidRendererProps> = ({ chart }) => {
         <div className="mb-1.5 font-semibold text-amber-400">
           Diagram Mermaid (Sintaks tidak valid atau belum lengkap)
         </div>
-        <pre className="overflow-x-auto text-zinc-300 font-mono bg-zinc-900/80 p-2 rounded">
+        <pre className="overflow-x-auto text-[#d4d4d8] font-mono bg-[#18181a] p-2 rounded border border-[#38383e]">
           <code>{chart}</code>
         </pre>
       </div>
@@ -81,7 +89,7 @@ export const MermaidRenderer: React.FC<MermaidRendererProps> = ({ chart }) => {
     return (
       <div
         data-testid="mermaid-loading"
-        className="my-3 flex items-center justify-center p-3 text-xs text-zinc-500 bg-zinc-900/40 rounded-lg border border-zinc-800/50 animate-pulse"
+        className="my-3 flex items-center justify-center p-3 text-xs text-[#71717a] bg-[#1a1a1d]/50 rounded-lg border border-[#38383e] animate-pulse"
       >
         Memuat diagram Mermaid...
       </div>
@@ -91,7 +99,7 @@ export const MermaidRenderer: React.FC<MermaidRendererProps> = ({ chart }) => {
   return (
     <div
       data-testid="mermaid-diagram"
-      className="my-3 flex justify-center overflow-x-auto rounded-lg border border-zinc-800/80 bg-zinc-900/60 p-4 select-none [&_svg]:max-w-full [&_svg]:h-auto"
+      className="my-3 flex justify-center overflow-x-auto rounded-lg border border-[#38383e] bg-[#242428] p-4 select-none [&_svg]:max-w-full [&_svg]:h-auto"
       dangerouslySetInnerHTML={{ __html: svgContent }}
     />
   );
@@ -194,16 +202,16 @@ export const CodeBlockWrapper: React.FC<React.ComponentPropsWithoutRef<"pre">> =
   };
 
   return (
-    <div className="my-3 rounded-lg border border-zinc-800/90 bg-zinc-950/95 overflow-hidden shadow-sm">
+    <div className="my-3 rounded-lg border border-[#38383e] bg-[#18181a] overflow-hidden shadow-sm">
       {/* Code Header with language and copy button */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border-b border-zinc-800/80 text-[11px] select-none">
-        <span className="font-mono font-medium text-zinc-400 uppercase tracking-wider text-[10px]">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[#222226] border-b border-[#38383e] text-[11px] select-none">
+        <span className="font-mono font-medium text-[#a1a1aa] uppercase tracking-wider text-[10px]">
           {language || "code"}
         </span>
         <button
           type="button"
           onClick={handleCopy}
-          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition text-[11px]"
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[#a1a1aa] hover:text-[#fafafa] hover:bg-[#28282d] transition text-[11px]"
           aria-label="Salin kode"
           title="Salin kode"
         >
@@ -223,7 +231,7 @@ export const CodeBlockWrapper: React.FC<React.ComponentPropsWithoutRef<"pre">> =
 
       {/* Code Body */}
       <pre
-        className={`p-3 overflow-x-auto font-mono text-xs leading-relaxed text-zinc-100 ${className || ""}`}
+        className={`p-3 overflow-x-auto font-mono text-xs leading-relaxed text-[#d4d4d8] ${className || ""}`}
         {...rest}
       >
         {children}
@@ -231,6 +239,143 @@ export const CodeBlockWrapper: React.FC<React.ComponentPropsWithoutRef<"pre">> =
     </div>
   );
 };
+
+type AlertType = "NOTE" | "TIP" | "IMPORTANT" | "WARNING" | "CAUTION";
+
+const ALERT_CONFIG: Record<
+  AlertType,
+  {
+    title: string;
+    icon: React.ComponentType<{ className?: string }>;
+    borderColor: string;
+    bgColor: string;
+    textColor: string;
+  }
+> = {
+  NOTE: {
+    title: "Note",
+    icon: Info,
+    borderColor: "border-sky-500/40 border-l-sky-400",
+    bgColor: "bg-sky-950/25",
+    textColor: "text-sky-400",
+  },
+  TIP: {
+    title: "Tip",
+    icon: Lightbulb,
+    borderColor: "border-emerald-500/40 border-l-emerald-400",
+    bgColor: "bg-emerald-950/25",
+    textColor: "text-emerald-400",
+  },
+  IMPORTANT: {
+    title: "Important",
+    icon: AlertCircle,
+    borderColor: "border-purple-500/40 border-l-purple-400",
+    bgColor: "bg-purple-950/25",
+    textColor: "text-purple-400",
+  },
+  WARNING: {
+    title: "Warning",
+    icon: AlertTriangle,
+    borderColor: "border-amber-500/40 border-l-amber-400",
+    bgColor: "bg-amber-950/25",
+    textColor: "text-amber-400",
+  },
+  CAUTION: {
+    title: "Caution",
+    icon: OctagonAlert,
+    borderColor: "border-rose-500/40 border-l-rose-400",
+    bgColor: "bg-rose-950/25",
+    textColor: "text-rose-400",
+  },
+};
+
+const ALERT_REGEX = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i;
+
+function parseAlertFromChildren(children: React.ReactNode): {
+  alertType: AlertType | null;
+  content: React.ReactNode;
+} {
+  const childArray = React.Children.toArray(children);
+  if (childArray.length === 0) {
+    return { alertType: null, content: children };
+  }
+
+  // Lewati string yang hanya berisi newline/whitespace dari parser AST
+  const firstMeaningfulIndex = childArray.findIndex(
+    (c) => !(typeof c === "string" && c.trim() === "")
+  );
+
+  if (firstMeaningfulIndex === -1) {
+    return { alertType: null, content: children };
+  }
+
+  const firstNode = childArray[firstMeaningfulIndex];
+
+  // Skenario 1: firstNode adalah string langsung
+  if (typeof firstNode === "string") {
+    const match = firstNode.match(ALERT_REGEX);
+    if (match) {
+      const alertType = match[1].toUpperCase() as AlertType;
+      const remainder = firstNode.slice(match[0].length).replace(/^\s*\n?/, "");
+      const newChildren = [
+        ...childArray.slice(0, firstMeaningfulIndex),
+        ...(remainder ? [remainder] : []),
+        ...childArray.slice(firstMeaningfulIndex + 1),
+      ];
+      return { alertType, content: newChildren };
+    }
+  }
+
+  // Skenario 2: firstNode adalah ReactElement (umumnya <p>)
+  if (React.isValidElement(firstNode)) {
+    const elementChildren = React.Children.toArray(
+      (firstNode.props as { children?: React.ReactNode }).children
+    );
+
+    const firstTextIndex = elementChildren.findIndex(
+      (c) => !(typeof c === "string" && c.trim() === "")
+    );
+
+    if (
+      firstTextIndex !== -1 &&
+      typeof elementChildren[firstTextIndex] === "string"
+    ) {
+      const text = elementChildren[firstTextIndex];
+      const match = text.match(ALERT_REGEX);
+      if (match) {
+        const alertType = match[1].toUpperCase() as AlertType;
+        const remainder = text
+          .slice(match[0].length)
+          .replace(/^\s*\n?/, "");
+
+        let newFirstNode: React.ReactNode = null;
+        const newElementChildren = [
+          ...elementChildren.slice(0, firstTextIndex),
+          ...(remainder ? [remainder] : []),
+          ...elementChildren.slice(firstTextIndex + 1),
+        ].filter((c) => !(typeof c === "string" && c.trim() === ""));
+
+        if (newElementChildren.length > 0) {
+          newFirstNode = React.cloneElement(
+            firstNode as React.ReactElement<{ children?: React.ReactNode }>,
+            {},
+            ...newElementChildren
+          );
+        }
+
+        const newContent = [
+          ...childArray.slice(0, firstMeaningfulIndex),
+          ...(newFirstNode ? [newFirstNode] : []),
+          ...childArray.slice(firstMeaningfulIndex + 1),
+        ];
+
+        return { alertType, content: newContent };
+      }
+    }
+  }
+
+  return { alertType: null, content: children };
+}
 
 export const markdownComponents = {
   pre(props: React.ComponentPropsWithoutRef<"pre">) {
@@ -256,7 +401,7 @@ export const markdownComponents = {
     if (isInline) {
       return (
         <code
-          className={`rounded bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[12px] text-amber-300 border border-zinc-700/50 ${className || ""}`}
+          className={`rounded bg-[#2e2e34] px-1.5 py-0.5 font-mono text-[12px] text-amber-300 border border-[#45454e] ${className || ""}`}
           {...rest}
         >
           {children}
@@ -268,6 +413,39 @@ export const markdownComponents = {
       <code className={className} {...rest}>
         {children}
       </code>
+    );
+  },
+  blockquote(props: React.ComponentPropsWithoutRef<"blockquote">) {
+    const { children, className, ...rest } = props;
+    const { alertType, content } = parseAlertFromChildren(children);
+
+    if (alertType) {
+      const config = ALERT_CONFIG[alertType];
+      const Icon = config.icon;
+
+      return (
+        <div
+          role="region"
+          aria-label={`${config.title} alert`}
+          className={`my-3 rounded-r-lg border border-l-4 ${config.borderColor} ${config.bgColor} p-3.5 transition-colors select-text not-italic`}
+        >
+          <div
+            className={`flex items-center gap-1.5 font-bold uppercase tracking-wider text-[11px] mb-2 ${config.textColor} select-none`}
+          >
+            <Icon className="w-4 h-4 shrink-0" />
+            <span>{config.title}</span>
+          </div>
+          <div className="text-[#d4d4d8] leading-relaxed space-y-2.5 [&_strong]:text-white [&_strong]:font-bold [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-[#fafafa] [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-[#fafafa] [&_h3]:text-xs [&_h3]:font-medium [&_h3]:text-[#f4f4f5] [&_p]:mb-1.5 [&>*:last-child]:mb-0">
+            {content}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <blockquote className={className} {...rest}>
+        {children}
+      </blockquote>
     );
   },
 };
