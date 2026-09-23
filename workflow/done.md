@@ -34,6 +34,13 @@
 - [x] Live Q&A Text Prompt Input & Markdown Code Block Formatting — selesai, spec: implementation_plan.md
   Catatan: Menambahkan jalur input teks normal (single-line input bar) pada Live Q&A berdampingan dengan VN F8 melalui command `ask_ai_text` yang langsung mengeksekusi RAG Obsidian Vault & OpenRouter AI; perbaikan tampilan format kode AI via `CodeBlockWrapper` dengan tema syntax highlighting GitHub Dark resmi (`highlight.js/styles/github-dark.css`), header bahasa, tombol salin/copy interaktif, dan inline code badges; 72 frontend unit tests dan 64 backend unit tests lolos 100%.
 - [x] Stealth Window Enhancement: Hide from Taskbar & Alt+Tab Switcher — selesai, spec: chat discussion
-  Catatan: Opsi `"skipTaskbar": true` ditambahkan pada `tauri.conf.json`; pada `lib.rs` Win32 `apply_stealth()` ditambahkan invisible dummy owner window (`CreateWindowExW("STATIC")`) via `GWLP_HWNDPARENT` serta pembersihan `WS_EX_APPWINDOW` dan `WS_EX_TOOLWINDOW` sehingga window otomatis hilang dari switcher Alt+Tab Windows tanpa merusak proporsi caption/close button.
-
-
+- [x] Global Hotkey Ctrl+F10 untuk Cycle Document Tab di Notes Mode — selesai, spec: implementation_plan.md
+  Catatan: sesuai spec. Menambahkan registrasi shortcut OS Ctrl+F10 via tauri-plugin-global-shortcut di core Rust, event notes:cycle-tab ditangani di NotesPanel untuk merotasi tab dokumen aktif secara melingkar (cycle forward) tanpa membutuhkan window focus, menjaga stealth WS_EX_NOACTIVATE; ditambahkan unit test di frontend & backend; 76 frontend unit tests dan 69 backend unit tests lolos 100%.
+- [x] GitHub Markdown Alerts / Callout Box (> [!NOTE], [!TIP], etc.) — selesai, spec: implementation_plan.md
+  Catatan: sesuai spec. Mendukung render kartu callout berkontras tinggi untuk [!NOTE] (biru), [!TIP] (hijau), [!IMPORTANT] (ungu), [!WARNING] (kuning), dan [!CAUTION] (merah) lengkap dengan ikon Lucide dan teks isi not-italic, sementara kutipan reguler tetap mempertahankan styling ash-gray italic; 79 frontend unit tests dan 69 backend unit tests lolos 100%.
+- [x] Mermaid Diagram Zoom, Pan & SVG Export — selesai, spec: chat discussion
+  Catatan: Menambahkan kontrol zoom in/out, pan drag, mouse wheel zoom, reset zoom, dan tombol salin SVG ke clipboard pada `MermaidRenderer`; 13 unit test frontend lolos 100%.
+- [x] In-App Find Bar in Notes Mode (Ctrl+F11 / Ctrl+F12) — selesai, spec: chat discussion
+  Catatan: Menambahkan komponen `FindBar` dan integrasi pencarian di `NotesPanel` menggunakan CSS Custom Highlight API (`::highlight(search-results)` & `::highlight(search-current)`), navigasi match Enter / Shift+Enter / Esc, serta registrasi global hotkey Ctrl+F11 & Ctrl+F12 yang otomatis mengaktifkan window focus via Win32 SetForegroundWindow; 90 frontend unit tests dan 69 backend unit tests lolos 100%.
+- [x] Fix Screen QA Win32 Thread Context & Vision Model Update — selesai, spec: chat discussion
+  Catatan: Mengaitkan worker thread Tokio ke Input Desktop aktif Windows via `OpenInputDesktop` & `SetThreadDesktop` sebelum `BitBlt` GDI untuk mengatasi error ERROR_INVALID_HANDLE/ACCESS_DENIED; memperbarui model vision OpenRouter ke model aktif (`ling-3.0-flash-vl:free`, `nemotron-3-nano-omni-30b-a3b-reasoning:free`, `dots-3-note-preview:free`) dan menyempurnakan prompt adaptif untuk soal pilihan ganda (MCQ) & coding; 69 backend unit tests lolos 100%.
