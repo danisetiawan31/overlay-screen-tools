@@ -39,3 +39,9 @@ tauri-plugin-notification = "2.3.3"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 base64 = "0.22"
 
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

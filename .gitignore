@@ -4,6 +4,7 @@ dist/
 dist-ssr/
 src-tauri/target/
 src-tauri/gen/schemas/
+release-build/
 
 # Local config & sensitive files
 config.json
