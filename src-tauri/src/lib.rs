@@ -93,6 +93,16 @@ pub struct QaErrorPayload {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "notes:cycle-tab")]
+pub struct NotesCycleTabPayload {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+#[tauri_specta(event_name = "notes:toggle-find")]
+pub struct NotesToggleFindPayload {}
+
 unsafe extern "system" fn enum_child_proc(hwnd: HWND, _lparam: LPARAM) -> i32 {
     // SAFETY: HWND di-pass langsung oleh sistem Windows saat EnumChildWindows berjalan.
     unsafe {
@@ -389,31 +399,49 @@ where
     }
 
     let mut last_error = String::from("Semua API key gagal");
-    println!("[FALLBACK] Memulai percobaan fallback dengan {} API key terkonfigurasi.", valid_keys.len());
+    println!(
+        "[FALLBACK] Memulai percobaan fallback dengan {} API key terkonfigurasi.",
+        valid_keys.len()
+    );
     for (idx, key) in valid_keys.iter().enumerate() {
         let masked = if key.len() >= 14 {
             format!("{}...{}", &key[..8], &key[key.len() - 4..])
         } else {
             "***".to_string()
         };
-        println!("[FALLBACK] Mencoba key [{}/{}] ({})", idx + 1, valid_keys.len(), masked);
+        println!(
+            "[FALLBACK] Mencoba key [{}/{}] ({})",
+            idx + 1,
+            valid_keys.len(),
+            masked
+        );
         match operation(key).await {
             Ok(val) => {
-                println!("[FALLBACK] Key [{}/{}] ({}) BERHASIL!", idx + 1, valid_keys.len(), masked);
+                println!(
+                    "[FALLBACK] Key [{}/{}] ({}) BERHASIL!",
+                    idx + 1,
+                    valid_keys.len(),
+                    masked
+                );
                 return Ok(val);
             }
             Err((status, msg)) => match classify_http_error(status, &msg) {
                 RetryAction::StopNonTransient(err) => {
                     eprintln!(
                         "[FALLBACK] Key [{}/{}] non-transient error: {}. Hentikan fallback.",
-                        idx + 1, valid_keys.len(), err
+                        idx + 1,
+                        valid_keys.len(),
+                        err
                     );
                     return Err(err);
                 }
                 RetryAction::RetryNextKey(err) => {
                     eprintln!(
                         "[FALLBACK] Key [{}/{}] gagal ({:?}): {}. Beralih ke key berikutnya...",
-                        idx + 1, valid_keys.len(), status, err
+                        idx + 1,
+                        valid_keys.len(),
+                        status,
+                        err
                     );
                     last_error = err;
                 }
@@ -743,8 +771,8 @@ pub async fn call_openrouter_vision_ai(
     let request_payload = OpenRouterVisionRequest {
         model: None,
         models: Some(vec![
-            "nex-agi/nex-n2.5-pro:free".to_string(),
-            "google/gemma-4-26b-a4b-it:free".to_string(),
+            "inclusionai/ling-3.0-flash-vl:free".to_string(),
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free".to_string(),
             "dots-studio/dots-3-note-preview:free".to_string(),
         ]),
         messages: vec![
@@ -779,7 +807,12 @@ pub async fn call_openrouter_vision_ai(
         .json(&request_payload)
         .send()
         .await
-        .map_err(|e| (e.status(), format!("Network error OpenRouter Vision: {}", e)))?;
+        .map_err(|e| {
+            (
+                e.status(),
+                format!("Network error OpenRouter Vision: {}", e),
+            )
+        })?;
 
     let status = response.status();
     if !status.is_success() {
@@ -799,8 +832,12 @@ pub async fn call_openrouter_vision_ai(
         (Some(status), msg)
     })?;
 
-    let json_val: serde_json::Value = serde_json::from_str(&raw_text)
-        .map_err(|e| (Some(status), format!("Gagal parse JSON OpenRouter Vision: {}", e)))?;
+    let json_val: serde_json::Value = serde_json::from_str(&raw_text).map_err(|e| {
+        (
+            Some(status),
+            format!("Gagal parse JSON OpenRouter Vision: {}", e),
+        )
+    })?;
 
     if let Some(content) = json_val
         .get("choices")
@@ -815,7 +852,10 @@ pub async fn call_openrouter_vision_ai(
         .and_then(|e| e.get("message"))
         .and_then(|m| m.as_str())
     {
-        Err((Some(status), format!("OpenRouter Vision error: {}", err_msg)))
+        Err((
+            Some(status),
+            format!("OpenRouter Vision error: {}", err_msg),
+        ))
     } else {
         Err((
             Some(status),
@@ -846,14 +886,13 @@ pub async fn trigger_screen_qa(app: &tauri::AppHandle) -> Result<(), String> {
             .config
             .clone()
             .ok_or_else(|| "Config belum dimuat di memori aplikasi".to_string())?;
-        (
-            cfg.openrouter_api_keys,
-            gen,
-            cfg.obsidian_vault_path,
-        )
+        (cfg.openrouter_api_keys, gen, cfg.obsidian_vault_path)
     };
 
-    println!("[SCREEN QA] Memicu silent screen capture & Vision AI (generasi: {})", current_gen);
+    println!(
+        "[SCREEN QA] Memicu silent screen capture & Vision AI (generasi: {})",
+        current_gen
+    );
 
     // 1. Pindahkan tab UI ke Q&A dan tampilkan indikator proses
     let _ = app.emit("qa:recording-started", ());
@@ -904,7 +943,9 @@ pub async fn trigger_screen_qa(app: &tauri::AppHandle) -> Result<(), String> {
     let vault_context = if let Some(ref path_str) = obsidian_vault_path {
         let path = std::path::Path::new(path_str);
         match vault::scan_vault_markdown_files(path) {
-            Ok(docs) => vault::extract_relevant_context(&docs, "coding problem algorithm solution", 3000),
+            Ok(docs) => {
+                vault::extract_relevant_context(&docs, "coding problem algorithm solution", 3000)
+            }
             Err(_) => None,
         }
     } else {
@@ -970,11 +1011,7 @@ pub async fn trigger_selected_text_qa(app: &tauri::AppHandle) -> Result<(), Stri
             .config
             .clone()
             .ok_or_else(|| "Config belum dimuat di memori aplikasi".to_string())?;
-        (
-            cfg.openrouter_api_keys,
-            gen,
-            cfg.obsidian_vault_path,
-        )
+        (cfg.openrouter_api_keys, gen, cfg.obsidian_vault_path)
     };
 
     println!(
@@ -1047,16 +1084,17 @@ pub async fn trigger_selected_text_qa(app: &tauri::AppHandle) -> Result<(), Stri
     };
 
     // 4. Eksekusi request ke 3 model teks utama via execute_fallback_keys & call_openrouter_ai
-    let answer_res = execute_fallback_keys(&openrouter_keys, |key| {
-        let key = key.to_string();
-        let client = client.clone();
-        let prompt_text = captured_text.clone();
-        let vault_context = vault_context.clone();
-        async move {
-            call_openrouter_ai(&client, &key, &prompt_text, vault_context.as_deref()).await
-        }
-    })
-    .await;
+    let answer_res =
+        execute_fallback_keys(&openrouter_keys, |key| {
+            let key = key.to_string();
+            let client = client.clone();
+            let prompt_text = captured_text.clone();
+            let vault_context = vault_context.clone();
+            async move {
+                call_openrouter_ai(&client, &key, &prompt_text, vault_context.as_deref()).await
+            }
+        })
+        .await;
 
     // Discard jika ada request baru
     if !is_qa_generation_current(app, current_gen) {
@@ -1663,7 +1701,9 @@ pub fn run() {
             NotesErrorPayload,
             TranscriptResultPayload,
             AnswerResultPayload,
-            QaErrorPayload
+            QaErrorPayload,
+            NotesCycleTabPayload,
+            NotesToggleFindPayload
         ]);
 
     #[cfg(not(debug_assertions))]
@@ -1688,7 +1728,9 @@ pub fn run() {
             NotesErrorPayload,
             TranscriptResultPayload,
             AnswerResultPayload,
-            QaErrorPayload
+            QaErrorPayload,
+            NotesCycleTabPayload,
+            NotesToggleFindPayload
         ]);
 
     #[cfg(debug_assertions)]
@@ -1705,6 +1747,9 @@ pub fn run() {
     let ctrl_f8_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::F8);
     let ctrl_f7_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::F7);
     let f6_shortcut = Shortcut::new(None, Code::F6);
+    let ctrl_f10_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::F10);
+    let ctrl_f11_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::F11);
+    let ctrl_f12_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::F12);
 
     if let Err(err) = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1716,6 +1761,24 @@ pub fn run() {
                         toggle_overlay_visibility(app);
                     } else if shortcut == &f6_shortcut && event.state() == ShortcutState::Pressed {
                         let _ = app.emit("tab:toggle", ());
+                    } else if shortcut == &ctrl_f10_shortcut && event.state() == ShortcutState::Pressed {
+                        let _ = app.emit("notes:cycle-tab", NotesCycleTabPayload {});
+                    } else if (shortcut == &ctrl_f11_shortcut || shortcut == &ctrl_f12_shortcut)
+                        && event.state() == ShortcutState::Pressed
+                    {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.set_focus();
+                            #[cfg(windows)]
+                            if let Ok(hwnd) = window.hwnd() {
+                                // SAFETY: HWND valid didapatkan dari WebViewWindow aktif di Tauri.
+                                unsafe {
+                                    windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(
+                                        hwnd.0 as _,
+                                    );
+                                }
+                            }
+                        }
+                        let _ = app.emit("notes:toggle-find", NotesToggleFindPayload {});
                     } else if (shortcut == &f7_shortcut || shortcut == &ctrl_f8_shortcut)
                         && event.state() == ShortcutState::Pressed
                     {
@@ -2189,6 +2252,17 @@ pub fn run() {
                 // Registrasi F6 (Toggle Tab Notes <-> Live Q&A)
                 let _ = app.global_shortcut().register(f6_shortcut);
                 println!("[HOTKEY] F6 (Toggle Tab) shortcut terdaftar - siap digunakan");
+
+                // Registrasi Ctrl+F10 (Cycle Document Tab di Notes Mode)
+                let _ = app.global_shortcut().register(ctrl_f10_shortcut);
+                println!("[HOTKEY] Ctrl+F10 (Cycle Document Tab) shortcut terdaftar - siap digunakan");
+
+                // Registrasi Ctrl+F11 & Ctrl+F12 (Toggle Find Bar di Notes Mode)
+                match app.global_shortcut().register(ctrl_f11_shortcut) {
+                    Ok(_) => println!("[HOTKEY] Ctrl+F11 (Toggle Find Bar) shortcut terdaftar - siap digunakan"),
+                    Err(err) => eprintln!("[HOTKEY ERROR] Gagal mendaftarkan Ctrl+F11: {}", err),
+                }
+                let _ = app.global_shortcut().register(ctrl_f12_shortcut);
             }
 
             // 7. Auto-restore notes file jika tersimpan di config
@@ -2629,7 +2703,7 @@ mod tests {
         );
         assert_eq!(
             classify_http_error(None, "connection timeout"),
-            RetryAction::RetryNextKey("connection timeout".to_string())
+            RetryAction::RetryNextKey("connection timeout".to_string()),
         );
     }
 
@@ -2768,5 +2842,3 @@ mod tests {
         std::env::remove_var("OPENROUTER_API_URL");
     }
 }
-
-

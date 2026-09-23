@@ -83,7 +83,10 @@ pub fn simulate_ctrl_c() {
         );
 
         if sent != inputs.len() as u32 {
-            eprintln!("[CLIPBOARD] Peringatan: SendInput Ctrl+C hanya terkirim {} dari 4 input", sent);
+            eprintln!(
+                "[CLIPBOARD] Peringatan: SendInput Ctrl+C hanya terkirim {} dari 4 input",
+                sent
+            );
         }
     }
 }
@@ -106,7 +109,9 @@ pub fn get_clipboard_text() -> Result<String, String> {
         }
 
         if !opened {
-            return Err("Gagal membuka clipboard sistem (sedang digunakan proses lain)".to_string());
+            return Err(
+                "Gagal membuka clipboard sistem (sedang digunakan proses lain)".to_string(),
+            );
         }
 
         let handle = GetClipboardData(CF_UNICODETEXT);
@@ -159,7 +164,9 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
         }
 
         if !opened {
-            return Err("Gagal membuka clipboard sistem (sedang digunakan proses lain)".to_string());
+            return Err(
+                "Gagal membuka clipboard sistem (sedang digunakan proses lain)".to_string(),
+            );
         }
 
         EmptyClipboard();

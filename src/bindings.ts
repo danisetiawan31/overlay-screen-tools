@@ -27,7 +27,9 @@ export const commands = {
 export const events = {
 	answerResult: makeEvent<AnswerResultPayload>("answer:result"),
 	configError: makeEvent<ConfigErrorPayload>("config:error"),
+	notesCycleTab: makeEvent<NotesCycleTabPayload>("notes:cycle-tab"),
 	notesError: makeEvent<NotesErrorPayload>("notes:error"),
+	notesToggleFind: makeEvent<NotesToggleFindPayload>("notes:toggle-find"),
 	notesUpdate: makeEvent<NotesUpdatePayload>("notes:update"),
 	qaError: makeEvent<QaErrorPayload>("qa:error"),
 	qaRecordingEnded: makeEvent<RecordingEndedPayload>("qa:recording-ended"),
@@ -62,6 +64,8 @@ export type NoteDocument = {
 	content: string,
 };
 
+export type NotesCycleTabPayload = Record<string, never>;
+
 export type NotesErrorPayload = {
 	message: string,
 };
@@ -72,6 +76,8 @@ export type NotesState = {
 	content: string | null,
 	error: string | null,
 };
+
+export type NotesToggleFindPayload = Record<string, never>;
 
 export type NotesUpdatePayload = {
 	path: string,

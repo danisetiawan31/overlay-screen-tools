@@ -65,7 +65,6 @@ pub struct CopyToClipboardArgs {
     pub text: String,
 }
 
-
 #[cfg(debug_assertions)]
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -492,11 +491,7 @@ pub async fn ask_ai_text(args: AskAiTextArgs, app: tauri::AppHandle) -> Result<(
             .config
             .clone()
             .ok_or_else(|| "Config belum dimuat di memori aplikasi".to_string())?;
-        (
-            cfg.openrouter_api_keys,
-            gen,
-            cfg.obsidian_vault_path,
-        )
+        (cfg.openrouter_api_keys, gen, cfg.obsidian_vault_path)
     };
 
     // Emit transcript:result agar UI langsung menampilkan pertanyaan teks di panel
@@ -636,8 +631,18 @@ pub fn test_trigger_hotkey(
             handle_f8_released_event(&app);
             Ok(())
         }
+        ("CTRL+F10", "pressed") | ("F10", "pressed") => {
+            use tauri::Emitter;
+            let _ = app.emit("notes:cycle-tab", crate::NotesCycleTabPayload {});
+            Ok(())
+        }
+        ("CTRL+F11", "pressed") | ("F11", "pressed") | ("CTRL+F12", "pressed") | ("F12", "pressed") => {
+            use tauri::Emitter;
+            let _ = app.emit("notes:toggle-find", crate::NotesToggleFindPayload {});
+            Ok(())
+        }
         _ => Err(
-            "Kombinasi hotkey/state simulasi tidak valid (didukung: F9 Pressed, F8 Pressed/Released)"
+            "Kombinasi hotkey/state simulasi tidak valid (didukung: F9 Pressed, F8 Pressed/Released, CTRL+F10 Pressed, CTRL+F11 Pressed)"
                 .to_string(),
         ),
     }
@@ -696,4 +701,3 @@ mod tests {
         assert_eq!(res, Ok("Halo apa kabar?".to_string()));
     }
 }
-

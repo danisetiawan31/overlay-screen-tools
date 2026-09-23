@@ -32,6 +32,8 @@ describe("NotesPanel Component", () => {
     // Default mock untuk events
     vi.spyOn(events.notesUpdate, "listen").mockResolvedValue(vi.fn());
     vi.spyOn(events.notesError, "listen").mockResolvedValue(vi.fn());
+    vi.spyOn(events.notesCycleTab, "listen").mockResolvedValue(vi.fn());
+    vi.spyOn(events.notesToggleFind, "listen").mockResolvedValue(vi.fn());
   });
 
   it("1. initial mount calls getNotesState and renders restored markdown content", async () => {
@@ -473,5 +475,199 @@ describe("NotesPanel Component", () => {
     fireEvent.keyDown(textarea, { key: "ArrowRight", ctrlKey: true, shiftKey: true });
 
     expect(commands.setActiveNotesFile).not.toHaveBeenCalled();
+  });
+
+  it("19. Ctrl + ArrowRight (without shift) and Ctrl + Tab also navigate document tabs", async () => {
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Doc 1" },
+          { path: "/notes/doc2.md", title: "doc2.md", content: "# Doc 2" },
+        ],
+        activePath: null, // Fallback null test
+        content: "# Doc 1",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 1" })).toBeInTheDocument();
+
+    // Ctrl + ArrowRight without shift
+    fireEvent.keyDown(window, { key: "ArrowRight", ctrlKey: true, shiftKey: false });
+    expect(commands.setActiveNotesFile).toHaveBeenCalledWith("/notes/doc2.md");
+
+    // Ctrl + Tab
+    fireEvent.keyDown(window, { key: "Tab", ctrlKey: true, shiftKey: false });
+    expect(commands.setActiveNotesFile).toHaveBeenCalledWith("/notes/doc1.md");
+  });
+
+  it("cycles to next document tab when events.notesCycleTab (Ctrl+F10) fires", async () => {
+    let cycleTabCallback: (() => void) | null = null;
+    vi.spyOn(events.notesCycleTab, "listen").mockImplementation(async (cb) => {
+      cycleTabCallback = cb as unknown as () => void;
+      return vi.fn();
+    });
+
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Doc 1" },
+          { path: "/notes/doc2.md", title: "doc2.md", content: "# Doc 2" },
+          { path: "/notes/doc3.md", title: "doc3.md", content: "# Doc 3" },
+        ],
+        activePath: "/notes/doc1.md",
+        content: "# Doc 1",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 1" })).toBeInTheDocument();
+
+    // Trigger cycle 1 -> /notes/doc2.md
+    act(() => {
+      cycleTabCallback?.();
+    });
+    expect(commands.setActiveNotesFile).toHaveBeenCalledWith("/notes/doc2.md");
+
+    // Trigger cycle 2 -> /notes/doc3.md
+    act(() => {
+      cycleTabCallback?.();
+    });
+    expect(commands.setActiveNotesFile).toHaveBeenCalledWith("/notes/doc3.md");
+  });
+
+  it("preserves individual scroll positions when switching between document tabs", async () => {
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Doc 1\n\nLong content 1" },
+          { path: "/notes/doc2.md", title: "doc2.md", content: "# Doc 2\n\nLong content 2" },
+        ],
+        activePath: "/notes/doc1.md",
+        content: "# Doc 1\n\nLong content 1",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Doc 1" })).toBeInTheDocument();
+
+    const doc1Container = screen.getByTestId("doc-container-/notes/doc1.md");
+    const doc2Container = screen.getByTestId("doc-container-/notes/doc2.md");
+
+    expect(doc1Container).not.toHaveAttribute("hidden");
+    expect(doc2Container).toHaveAttribute("hidden");
+
+    // Scroll Doc 1 to 450px
+    doc1Container.scrollTop = 450;
+    fireEvent.scroll(doc1Container, { target: { scrollTop: 450 } });
+
+    // Switch to Doc 2
+    const tab2 = screen.getByRole("tab", { name: /doc2.md/i });
+    fireEvent.click(tab2);
+
+    expect(doc1Container).toHaveAttribute("hidden");
+    expect(doc2Container).not.toHaveAttribute("hidden");
+
+    // Scroll Doc 2 to 800px
+    doc2Container.scrollTop = 800;
+    fireEvent.scroll(doc2Container, { target: { scrollTop: 800 } });
+
+    // Switch back to Doc 1
+    const tab1 = screen.getByRole("tab", { name: /doc1.md/i });
+    fireEvent.click(tab1);
+
+    expect(doc1Container).not.toHaveAttribute("hidden");
+    expect(doc2Container).toHaveAttribute("hidden");
+    expect(doc1Container.scrollTop).toBe(450);
+
+    // Switch back to Doc 2
+    fireEvent.click(tab2);
+    expect(doc2Container).not.toHaveAttribute("hidden");
+    expect(doc2Container.scrollTop).toBe(800);
+  });
+
+  it("toggles FindBar on search button click and performs search", async () => {
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Magang Hub\n\nProgram magang sistem informasi magang" },
+        ],
+        activePath: "/notes/doc1.md",
+        content: "# Magang Hub\n\nProgram magang sistem informasi magang",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Magang Hub" })).toBeInTheDocument();
+
+    // Search bar awalnya tidak muncul
+    expect(screen.queryByRole("search")).not.toBeInTheDocument();
+
+    // Klik tombol cari 🔍
+    const searchBtn = screen.getByRole("button", { name: "Cari di dokumen" });
+    fireEvent.click(searchBtn);
+
+    // Search bar muncul
+    expect(screen.getByRole("search")).toBeInTheDocument();
+
+    // Ketik query pencarian
+    const searchInput = screen.getByPlaceholderText("Cari di dokumen...");
+    fireEvent.change(searchInput, { target: { value: "magang" } });
+
+    // Counter menampilkan 3 hasil (Magang Hub, magang, magang)
+    const counter = await screen.findByTestId("find-counter");
+    expect(counter).toHaveTextContent("1 / 3");
+
+    // Tutup search bar
+    const closeBtn = screen.getByRole("button", { name: "Tutup pencarian" });
+    fireEvent.click(closeBtn);
+    expect(screen.queryByRole("search")).not.toBeInTheDocument();
+  });
+
+  it("toggles FindBar when events.notesToggleFind (Ctrl+F11) fires", async () => {
+    let toggleFindCallback: (() => void) | null = null;
+    vi.spyOn(events.notesToggleFind, "listen").mockImplementation(async (cb) => {
+      toggleFindCallback = cb as unknown as () => void;
+      return vi.fn();
+    });
+
+    vi.spyOn(commands, "getNotesState").mockResolvedValue({
+      status: "ok",
+      data: {
+        documents: [
+          { path: "/notes/doc1.md", title: "doc1.md", content: "# Dokumentasi" },
+        ],
+        activePath: "/notes/doc1.md",
+        content: "# Dokumentasi",
+        error: null,
+      },
+    });
+
+    render(<NotesPanel />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Dokumentasi" })).toBeInTheDocument();
+
+    expect(screen.queryByRole("search")).not.toBeInTheDocument();
+
+    // Trigger Ctrl+F12 via callback
+    act(() => {
+      toggleFindCallback?.();
+    });
+
+    expect(screen.getByRole("search")).toBeInTheDocument();
+
+    // Trigger Ctrl+F12 lagi untuk menutup
+    act(() => {
+      toggleFindCallback?.();
+    });
+
+    expect(screen.queryByRole("search")).not.toBeInTheDocument();
   });
 });

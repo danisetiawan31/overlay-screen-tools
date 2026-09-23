@@ -21,7 +21,17 @@
 }
 
 ::selection {
-  background-color: rgba(147, 51, 234, 0.45);
+  background-color: rgba(168, 85, 247, 0.35);
+  color: #ffffff;
+}
+
+::highlight(search-results) {
+  background-color: #eab308;
+  color: #000000;
+}
+
+::highlight(search-current) {
+  background-color: #f97316;
   color: #ffffff;
 }
 

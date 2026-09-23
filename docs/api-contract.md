@@ -31,6 +31,8 @@ Semua command mengembalikan tipe `Result<T, String>` di Rust agar frontend memil
 | `answer:result` | `{ text: string }` | AI (OpenRouter) berhasil |
 | `qa:error` | `{ stage: "stt" \| "ai", message: string }` | STT atau AI gagal |
 | `config:error` | `{ message: string }` | `config.json` tidak ada/kosong/malformed saat startup — dikirim bersamaan dengan tray notification native (§7 TDD), bukan pengganti |
+| `notes:cycle-tab` | — | Hotkey global Ctrl+F10 ditekan (`ShortcutState::Pressed`) — frontend berpindah ke tab dokumen berikutnya secara melingkar |
+| `notes:toggle-find` | — | Hotkey global Ctrl+F11 ditekan (`ShortcutState::Pressed`) — frontend membuka/menutup (toggle) Find Bar |
 
 **Catatan ordering (Q&A)**: kalau F8 ditekan lagi atau input teks baru dikirim sebelum `transcript:result`/`answer:result`/`qa:error` dari request sebelumnya sempat di-emit, core WAJIB membuang hasil request lama begitu request baru mulai — frontend dijamin cuma pernah terima event dari request TERBARU. Frontend tidak perlu logic pembeda "request mana ini" — overwrite state apa adanya tiap event masuk (lihat TDD §5, state Q&A adalah single object).
 

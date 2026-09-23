@@ -44,6 +44,12 @@ vi.mock("./bindings", () => ({
     qaError: {
       listen: vi.fn().mockResolvedValue(vi.fn()),
     },
+    notesCycleTab: {
+      listen: vi.fn().mockResolvedValue(vi.fn()),
+    },
+    notesToggleFind: {
+      listen: vi.fn().mockResolvedValue(vi.fn()),
+    },
   },
 }));
 
